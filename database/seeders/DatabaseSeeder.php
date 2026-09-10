@@ -10,16 +10,17 @@ class DatabaseSeeder extends Seeder
 {
     use WithoutModelEvents;
 
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
-        // User::factory(10)->create();
+        $this->call(TelegramChannelSeeder::class);
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-        ]);
+        // The app has no HTTP surface, so this account exists only for local
+        // tinkering — seeding it onto a server would be pure noise.
+        if (app()->environment('local')) {
+            User::firstOrCreate(
+                ['email' => 'test@example.com'],
+                ['name' => 'Test User', 'password' => bcrypt('password')],
+            );
+        }
     }
 }

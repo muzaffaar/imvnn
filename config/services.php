@@ -38,6 +38,14 @@ return [
     'telegram' => [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
         'api_base_uri' => env('TELEGRAM_API_BASE_URI', 'https://api.telegram.org'),
+
+        // Channel TelegramChannelSeeder registers, so a deploy can be
+        // provisioned non-interactively. Read through config (not env()
+        // directly) because env() returns null once config is cached.
+        'channel' => [
+            'chat_id' => env('TELEGRAM_CHANNEL_CHAT_ID'),
+            'name' => env('TELEGRAM_CHANNEL_NAME'),
+        ],
     ],
 
     'gemini' => [

@@ -20,4 +20,29 @@ class TelegramChannel extends Model
     {
         return data_get($this->rules, $key, $default);
     }
+
+    /**
+     * Starting `rules` for a newly registered channel, shared by
+     * TelegramChannelSeeder and the `telegram:channel` command so the two
+     * setup paths can't drift into producing differently-behaving channels.
+     *
+     * Every key here is read back through rule() with its own fallback, so
+     * an existing channel missing a key still behaves sensibly — this is
+     * the initial payload, not the source of truth for defaults.
+     */
+    public static function defaultRules(array $overrides = []): array
+    {
+        return array_replace([
+            // Baseline 2h between posts, dropping toward 15 min as a backlog
+            // builds — see PublishNextReadyNewsItemJob.
+            'min_publish_interval_minutes' => 15,
+            'max_publish_interval_minutes' => 120,
+            'publish_backlog_saturation_count' => 5,
+
+            'max_images' => 4,
+            'prefer_video' => true,
+            'allow_media_group' => true,
+            'min_quality_score' => 0.35,
+        ], $overrides);
+    }
 }

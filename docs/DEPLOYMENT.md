@@ -39,9 +39,12 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-Fill in `.env`: `DB_*`, `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`. Leave
-`QUEUE_CONNECTION=database` and `MEDIA_DISK=local` unless you have S3/R2
-credentials — with every source reference-only, almost no bytes are stored.
+Fill in `.env`: `DB_*`, `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`. Keep
+`QUEUE_CONNECTION=database` and set `DB_QUEUE_RETRY_AFTER=960` so the
+900-second video worker cannot be released and re-run while it is still
+processing. Configure `MEDIA_DISK=s3` with a public object URL when downloaded
+media may be published; Telegram fetches media by URL rather than from this
+server's local disk.
 
 Keep the server clock on **UTC**. Timestamps are stored in UTC and rendered
 per-channel via `media.telegram_caption.display_timezone`; changing the
@@ -76,6 +79,21 @@ php artisan publishing:start 1        # id printed by the previous command
 before writing the row, so a misconfigured bot fails here rather than
 silently hours later.
 
+For an unattended provision (CI, image build, config-management run), set
+`TELEGRAM_CHANNEL_CHAT_ID` and optionally `TELEGRAM_CHANNEL_NAME` in `.env`
+and seed instead:
+
+```bash
+php artisan db:seed --class=TelegramChannelSeeder
+```
+
+Both paths write the same `rules` (`TelegramChannel::defaultRules()`). The
+seeder is safe to re-run: it never overwrites the `rules` of a channel that
+already exists, so cadence tuning survives a redeploy. What it *cannot* do
+is check anything with Telegram — a mistyped chat id seeds without complaint
+and only shows up later as a failed send, which is why the interactive
+command is the better choice when a human is present.
+
 ## 6. Workers (supervisor)
 
 ```bash
@@ -92,19 +110,15 @@ bug: a worker SIGKILLed mid-job leaves the job reserved, Laravel re-runs it
 after `retry_after`, and the publishing scheduler ends up with two chains
 posting in parallel.
 
-## 7. Scheduler (cron)
+## 7. Scheduler (Supervisor)
 
-```bash
-sudo crontab -u imvnn -e
-```
+The supplied Supervisor configuration includes an `imvnn-scheduler` program
+that runs `php artisan schedule:work` continuously. It drives `news:fetch`
+every 30 minutes (`news_sources.fetch_interval_minutes`) and restarts after a
+crash, just like the queue workers.
 
-```cron
-* * * * * cd /var/www/imvnn && php artisan schedule:run >> /dev/null 2>&1
-```
-
-This drives `news:fetch` every 30 minutes (`news_sources.fetch_interval_minutes`).
-`schedule:work` under supervisor is an equivalent alternative — use one, not
-both, or the fetch fires twice.
+Do **not** add a `schedule:run` cron entry when using this configuration, or
+the fetch runs twice.
 
 ## 8. Verify
 

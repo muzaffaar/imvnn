@@ -70,14 +70,11 @@ class AddTelegramChannelCommand extends Command
             [
                 'name' => $this->option('name') ?: ($chat['title'] ?? $this->argument('chat')),
                 'is_active' => true,
-                'rules' => [
+                'rules' => TelegramChannel::defaultRules([
                     'min_publish_interval_minutes' => (int) $this->option('min-interval'),
                     'max_publish_interval_minutes' => (int) $this->option('max-interval'),
                     'max_images' => (int) $this->option('max-images'),
-                    'prefer_video' => true,
-                    'allow_media_group' => true,
-                    'min_quality_score' => 0.35,
-                ],
+                ]),
             ],
         );
 
