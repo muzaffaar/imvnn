@@ -95,6 +95,28 @@ first, short-circuiting on the first hit:
    flip `media.deduplication.embedding_similarity_enabled` only once you've
    measured that Level 3 is missing duplicates that matter.
 
+### Level 0 — CDN renditions, at selection time
+
+The four levels above all fail for the most common real-world duplicate: one
+image served under several URLs by a CDN. research.google ships every
+article figure as both `original_images/X.png` and
+`images/X.width-1250.png`; blog.google as `X.width-1300.png` and
+`X.width-200.format-webp.webp`. The URLs genuinely differ (Level 1 misses
+them), and reference-only assets are never fetched, so no content or
+perceptual hash ever exists (Levels 2-3 never run). Left alone, the same
+picture is attached to a post two or three times.
+
+`RenditionKeyBuilder` produces a "same picture" key from host + filename
+with CDN rendition markers stripped (`.width-N`, `.format-X`, `-600x600`,
+`@2x`, trailing content hashes, ...), deliberately ignoring the directory
+since that's exactly what differs between renditions. A filename shorter
+than 8 characters falls back to the full path, so two unrelated `hero.jpg`
+under different article paths don't collapse into one.
+
+Applied in `MediaSelectionService` *after* ranking — so the surviving
+rendition of each picture is its best-scoring one — rather than at
+ingestion, keeping it non-destructive and consistent with the rule below.
+
 Duplicates are never deleted: the loser row gets `status=duplicate` and
 `duplicate_of_id` pointing at the canonical row (`MediaAsset::canonical()`).
 Everything downstream (selection, scoring) reads through `canonical()`, so a
@@ -284,10 +306,21 @@ job retry is deliberately disabled (`$tries = 1`) so a failed attempt can't
 spawn a second parallel chain; the `finally` reschedule is the only thing
 keeping it alive, by design.
 
-Started once per channel with `php artisan publishing:start {channel}`.
-Running it twice starts a second, independent chain — each claim is atomic
-(see below), so the only effect is posting roughly twice as often, never a
-duplicate post of the same article.
+Started with `php artisan publishing:start {channel}`, which is idempotent:
+it mints a fresh `telegram_channels.publish_chain_token`, and any chain
+still running under an older token retires on its next run instead of
+posting alongside the new one.
+
+That singleton guard is not optional bookkeeping — chains fork on their own.
+Force-killing a worker mid-job leaves the job *reserved*; Laravel re-runs it
+once `retry_after` elapses, and the interrupted run's `finally` then
+reschedules a second chain alongside the successor it had already
+dispatched. Three concurrent chains were observed after two worker restarts
+during development, which tripled the posting rate and burst nine posts into
+a live channel in half an hour. Each chain still claims any given article at
+most once (claiming is atomic, see below), so forks never *duplicate* a
+post — they only break the pacing, which is the whole point of the
+scheduler.
 
 **Eligibility** — a `NewsItem` is a candidate only once
 `media_analysis_completed_at` is set (by `AnalyzeMediaForNewsItemJob`, once
@@ -328,6 +361,31 @@ no deploy) via `computeDelaySeconds()`:
   (the same eligibility query `pickBestCandidate()` uses, minus the ranking),
   so the pacing continuously adapts as new articles finish analysis or get
   claimed.
+
+## Post format and length budget
+
+A post is assembled from a bold source line, the article's publish time in
+the channel's timezone (`media.telegram_caption.display_timezone`, default
+`Asia/Tashkent`), a bold headline plus 2-3 sentence summary in **both Uzbek
+and Russian**, and 2-4 topical hashtags — no links of any kind, since the
+post is meant to stand on its own rather than tease a click. `PostHeader`
+renders the shared source/time/hashtag pieces so the Gemini and plain
+composers can't drift apart in appearance.
+
+`CaptionBudget` enforces Telegram's length limits, which differ sharply by
+post type: **1024 characters for a photo/video/media-group caption** versus
+4096 for a plain `sendMessage`. This is not theoretical — a real bilingual
+post measured 1115 characters, which Telegram would have rejected outright,
+failing every media attempt before silently degrading to text-only via the
+fallback ladder. The limit applies to the *parsed* text, so HTML tags don't
+count toward it, and a margin is kept because some clients count emoji as
+two characters.
+
+Shrinking is ordered by what's least missed: drop hashtags, then give each
+language section an equal share of what the fixed parts leave over,
+trimming its body at a word boundary with an ellipsis. It never blind-cuts
+the assembled string, which could sever a `<b>` tag and break parsing for
+the whole message.
 
 ## Publishing fallback ladder
 
