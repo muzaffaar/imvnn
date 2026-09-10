@@ -54,6 +54,57 @@ class BoundedHttpFetcher
         return $contents;
     }
 
+    /**
+     * Fetches only the first $bytes of a resource via a Range request, for
+     * reading a file header without transferring (or storing) the file —
+     * see ImageDimensionProbe. Servers that ignore Range simply return the
+     * whole body, so the read is capped either way.
+     *
+     * @return array{body: string, total_size: ?int}
+     *
+     * @throws BoundedHttpFetchException
+     */
+    public function downloadRange(string $url, int $bytes, ?int $timeoutSeconds = null): array
+    {
+        try {
+            $response = $this->client->get($url, [
+                'timeout' => $timeoutSeconds ?? config('media.limits.download_timeout_seconds'),
+                'connect_timeout' => config('media.limits.download_connect_timeout_seconds'),
+                'allow_redirects' => true,
+                'stream' => true,
+                'headers' => $this->browserHeaders() + ['Range' => 'bytes=0-'.($bytes - 1)],
+            ]);
+        } catch (GuzzleException $e) {
+            throw new BoundedHttpFetchException("Failed to probe {$url}: {$e->getMessage()}", previous: $e);
+        }
+
+        $body = $response->getBody();
+        $contents = '';
+
+        while (! $body->eof() && strlen($contents) < $bytes) {
+            $contents .= $body->read(8192);
+        }
+
+        return [
+            'body' => $contents,
+            'total_size' => $this->totalSizeFrom($response),
+        ];
+    }
+
+    /** Prefers Content-Range's total (the real file size) over the partial Content-Length. */
+    private function totalSizeFrom(ResponseInterface $response): ?int
+    {
+        $contentRange = $response->getHeaderLine('Content-Range');
+
+        if ($contentRange !== '' && preg_match('#/(\d+)$#', $contentRange, $match)) {
+            return (int) $match[1];
+        }
+
+        $length = $response->getHeaderLine('Content-Length');
+
+        return $length !== '' && $response->getStatusCode() === 200 ? (int) $length : null;
+    }
+
     /** @throws BoundedHttpFetchException */
     public function downloadToFile(string $url, string $destinationPath, int $maxBytes): void
     {

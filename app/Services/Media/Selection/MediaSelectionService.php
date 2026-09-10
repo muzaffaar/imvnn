@@ -10,6 +10,7 @@ use App\Models\MediaAsset;
 use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\Media\Deduplication\RenditionKeyBuilder;
+use App\Services\Media\ImageDimensionProbe;
 use App\Services\Media\Scoring\MediaQualityScorer;
 use App\Services\Media\Scoring\TelegramCompatibilityChecker;
 use Illuminate\Support\Collection;
@@ -32,10 +33,14 @@ class MediaSelectionService
      */
     private const UNPUBLISHABLE_EXTENSIONS = ['svg', 'svgz', 'ico', 'bmp', 'tif', 'tiff'];
 
+    /** How many top candidates get their dimensions probed before the final ranking. */
+    private const PROBE_CANDIDATES = 8;
+
     public function __construct(
         private readonly MediaQualityScorer $qualityScorer,
         private readonly TelegramCompatibilityChecker $telegramChecker,
         private readonly RenditionKeyBuilder $renditionKeys,
+        private readonly ImageDimensionProbe $dimensionProbe,
     ) {}
 
     public function selectForNewsItem(NewsItem $newsItem, TelegramChannel $channel): PostMediaPlan
@@ -55,6 +60,12 @@ class MediaSelectionService
         // After ranking, so each surviving picture is represented by its
         // best-scoring rendition rather than an arbitrary one.
         $usable = $this->dropDuplicateRenditions($usable);
+
+        // Only now — for the few candidates of an article actually being
+        // published — is it worth learning real dimensions, which is what
+        // makes the resolution/aspect-ratio/Telegram-limit checks below
+        // mean anything for reference-only images.
+        $usable = $this->probeAndRerank($usable->take(self::PROBE_CANDIDATES));
 
         if ($usable->isEmpty()) {
             return PostMediaPlan::none();
@@ -118,6 +129,64 @@ class MediaSelectionService
         return $ranked
             ->unique(fn (MediaAsset $asset) => $this->renditionKeys->keyFor($asset))
             ->values();
+    }
+
+    /**
+     * Probes real dimensions, then drops what those dimensions reveal to be
+     * unpublishable and re-ranks on the now-meaningful scores. Everything
+     * here is invisible until dimensions are known, which is why it can't
+     * run earlier:
+     *
+     *  - tiny images (icons, tracking pixels, thumbnails masquerading as art)
+     *  - extreme aspect ratios: banner ads and sliced-up layout strips, which
+     *    also render as unreadable slivers in a Telegram album
+     *  - anything Telegram itself would reject (width+height > 10000, or a
+     *    ratio outside its accepted range), which would otherwise burn a
+     *    step of the publishing fallback ladder on a guaranteed failure
+     *
+     * @param  Collection<int, MediaAsset>  $candidates
+     * @return Collection<int, MediaAsset>
+     */
+    private function probeAndRerank(Collection $candidates): Collection
+    {
+        foreach ($candidates as $asset) {
+            if ($asset->type->isVisual()) {
+                $this->dimensionProbe->probe($asset);
+            }
+        }
+
+        return $candidates
+            ->reject(fn (MediaAsset $asset) => $this->hasUnusableDimensions($asset))
+            ->sortByDesc(fn (MediaAsset $asset) => $this->contextualScore($asset))
+            ->values();
+    }
+
+    private function hasUnusableDimensions(MediaAsset $asset): bool
+    {
+        if (! $asset->width || ! $asset->height) {
+            return false; // still unknown — judge on other signals rather than guessing
+        }
+
+        if ($asset->width < config('media.limits.min_image_width')
+            || $asset->height < config('media.limits.min_image_height')) {
+            return true;
+        }
+
+        $ratio = $asset->width / max(1, $asset->height);
+        $minRatio = config('media.telegram.photo_min_aspect_ratio');
+        $maxRatio = config('media.telegram.photo_max_aspect_ratio');
+
+        if ($ratio < $minRatio || $ratio > $maxRatio) {
+            return true;
+        }
+
+        // Anything past a banner-like ratio reads as a layout strip rather
+        // than a picture, well before Telegram's own hard limit.
+        if ($ratio > 4.0 || $ratio < 0.25) {
+            return true;
+        }
+
+        return ($asset->width + $asset->height) > config('media.telegram.photo_max_dimension_sum');
     }
 
     private function isUnpublishableFormat(MediaAsset $asset): bool

@@ -23,6 +23,7 @@ class PlainCaptionComposer implements CaptionComposerInterface
                 'body' => $this->excerpt($newsItem->content) ?? '',
             ]],
             null,
+            null,
             CaptionBudget::limitFor($plan),
         );
     }

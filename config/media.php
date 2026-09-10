@@ -186,9 +186,15 @@ return [
         // optional and only worth setting when there's more than one language
         // to tell apart. Note each extra language competes for the same
         // 1024-character caption budget (see CaptionBudget).
+        // `script` is a Unicode script name used to verify the model actually
+        // answered in the requested language rather than drifting to English
+        // (see CaptionText::matchesScript).
         'languages' => [
-            ['key' => 'russian', 'name' => 'Russian', 'flag' => null],
+            ['key' => 'russian', 'name' => 'Russian', 'flag' => null, 'script' => 'Cyrillic'],
         ],
+
+        // One short witty line reacting to the story, under the summary.
+        'humor_line' => env('TELEGRAM_CAPTION_HUMOR', true),
 
         // When Gemini can't produce a caption, the only fallback is the
         // article's own words — i.e. the source's language, usually English.

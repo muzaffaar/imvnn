@@ -48,6 +48,17 @@ class GeminiCaptionComposer implements CaptionComposerInterface
                 continue;
             }
 
+            // Rejecting here rather than posting anyway: the job retries, so
+            // a one-off bad generation costs a delay, whereas an English or
+            // half-empty post is visible to every reader.
+            if (! CaptionText::isLongEnough($text)) {
+                throw new GeminiCaptionException("Gemini returned too short a body for {$language['key']}.");
+            }
+
+            if (! CaptionText::matchesScript($text, $language['script'] ?? null)) {
+                throw new GeminiCaptionException("Gemini did not answer in {$language['name']}.");
+            }
+
             $sections[] = [
                 'flag' => $language['flag'] ?? null,
                 'title' => $this->orNull($response[$language['key'].'_title'] ?? null),
@@ -62,9 +73,37 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         return CaptionBudget::assemble(
             PostHeader::render($newsItem),
             $sections,
+            $this->humorLine($response['funny_line'] ?? null, $languages[0] ?? []),
             PostHeader::renderHashtags($response['hashtags'] ?? []),
             CaptionBudget::limitFor($plan),
         );
+    }
+
+    /**
+     * The witty one-liner, rendered as its own italic line so it reads as
+     * commentary rather than as part of the reported facts. One per post,
+     * in the primary language. Returns null — silently — when the model
+     * returned nothing usable, answered in the wrong language, or ran long:
+     * a missing quip is never worth failing a post over, and the prompt
+     * explicitly allows an empty string when nothing genuinely funny fits.
+     *
+     * @param  array{key?: string, name?: string, flag?: ?string, script?: ?string}  $language
+     */
+    private function humorLine(mixed $funnyLine, array $language): ?string
+    {
+        if (! config('media.telegram_caption.humor_line', true) || ! is_string($funnyLine)) {
+            return null;
+        }
+
+        $line = $this->orNull($funnyLine);
+
+        if ($line === null
+            || ! CaptionText::matchesScript($line, $language['script'] ?? null)
+            || mb_strlen($line) > 160) {
+            return null;
+        }
+
+        return "<i>😄 {$line}</i>";
     }
 
     /** @return list<array{key: string, name: string, flag: ?string}> */
@@ -103,9 +142,23 @@ class GeminiCaptionComposer implements CaptionComposerInterface
             English. Give each one a short, punchy headline (under 70
             characters) in its own language. {$sharedNote}
 
-            Match whatever tone genuinely fits the story — formal, humorous,
-            dramatic, warm, or serious — rather than forcing one fixed style. Emoji
-            are fine if they fit naturally.
+            Match whatever tone genuinely fits the story — formal, dramatic,
+            warm, or serious — rather than forcing one fixed style. At most two
+            or three emoji in total, and only where they genuinely fit.
+
+            Use ONLY facts stated in the article above. Do not add background,
+            figures, dates or names that aren't there, and do not overstate
+            what happened — the headline must be supported by the summary. If
+            the article is thin, write less rather than filling the gap.
+            Copy names, numbers and dates exactly as they appear.
+
+            Also write `funny_line`: ONE short witty remark (under 140
+            characters) reacting to this story, in {$languageList}. Dry,
+            observational humour that a reader would smile at — not a pun for
+            its own sake, not sarcasm about real people being harmed, and
+            never at the expense of the facts. If nothing genuinely funny
+            comes to mind for this story, return an empty string rather than
+            forcing a joke.
 
             Also pick 2-4 topical hashtag words (no "#", no spaces, letters and
             digits only) — e.g. the model, company, or field the story is about.
@@ -167,6 +220,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
             $properties[$language['key']] = ['type' => 'string'];
         }
 
+        $properties['funny_line'] = ['type' => 'string'];
         $properties['hashtags'] = ['type' => 'array', 'items' => ['type' => 'string']];
 
         return [
@@ -176,9 +230,19 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         ];
     }
 
+    /**
+     * Sanitize before escaping: CaptionText strips invisible/control
+     * characters and caps emoji on the raw text, while TelegramHtml::escape
+     * makes it safe for parse_mode=HTML. Doing it in the other order would
+     * leave the sanitizer inspecting `&lt;` instead of the character itself.
+     */
     private function orNull(?string $value): ?string
     {
-        $value = $value !== null ? trim($value) : null;
+        if ($value === null) {
+            return null;
+        }
+
+        $value = CaptionText::sanitize($value);
 
         return $value !== '' ? TelegramHtml::escape($value) : null;
     }

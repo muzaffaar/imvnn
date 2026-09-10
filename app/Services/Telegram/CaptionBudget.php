@@ -36,26 +36,37 @@ class CaptionBudget
     }
 
     /**
+     * Shrinks in order of what's least missed: hashtags, then the humour
+     * line, then the section bodies.
+     *
+     * The humour line is passed separately rather than appended to a body on
+     * purpose — it carries its own <i> markup, and a body-level truncation
+     * would happily cut through the middle of that tag, leaving unbalanced
+     * HTML that Telegram rejects for the whole message. Anything with markup
+     * is dropped whole or kept whole; only plain body text is ever trimmed.
+     *
      * @param  list<array{flag?: string, title?: ?string, body: string}>  $sections
      */
-    public static function assemble(?string $header, array $sections, ?string $hashtags, int $limit): string
-    {
+    public static function assemble(
+        ?string $header,
+        array $sections,
+        ?string $humorLine,
+        ?string $hashtags,
+        int $limit,
+    ): string {
         $budget = $limit - self::SAFETY_MARGIN;
 
-        $full = self::join($header, $sections, $hashtags);
-        if (self::visibleLength($full) <= $budget) {
-            return $full;
-        }
+        foreach ([[$humorLine, $hashtags], [$humorLine, null], [null, null]] as [$humor, $tags]) {
+            $candidate = self::join($header, $sections, $humor, $tags);
 
-        // Hashtags are the most expendable piece.
-        $withoutHashtags = self::join($header, $sections, null);
-        if (self::visibleLength($withoutHashtags) <= $budget) {
-            return $withoutHashtags;
+            if (self::visibleLength($candidate) <= $budget) {
+                return $candidate;
+            }
         }
 
         // Then give each section an equal share of whatever the fixed parts
         // (header, flags, titles) leave behind.
-        $overhead = self::visibleLength(self::join($header, self::withEmptyBodies($sections), null));
+        $overhead = self::visibleLength(self::join($header, self::withEmptyBodies($sections), null, null));
         $perSection = (int) floor(max(0, $budget - $overhead) / max(1, count($sections)));
 
         $trimmed = array_map(
@@ -63,21 +74,21 @@ class CaptionBudget
             $sections,
         );
 
-        $result = self::join($header, $trimmed, null);
+        $result = self::join($header, $trimmed, null, null);
 
         // Degenerate case: titles alone blow the budget — drop them too.
         if (self::visibleLength($result) > $budget) {
             $result = self::join($header, array_map(
                 fn (array $section) => [...$section, 'title' => null],
                 $trimmed,
-            ), null);
+            ), null, null);
         }
 
         return $result;
     }
 
     /** @param list<array{flag?: string, title?: ?string, body: string}> $sections */
-    private static function join(?string $header, array $sections, ?string $hashtags): string
+    private static function join(?string $header, array $sections, ?string $humorLine, ?string $hashtags): string
     {
         $parts = [$header];
 
@@ -96,6 +107,7 @@ class CaptionBudget
             $parts[] = $block !== '' ? $block : null;
         }
 
+        $parts[] = $humorLine;
         $parts[] = $hashtags;
 
         return implode("\n\n", array_filter($parts, fn (?string $p) => $p !== null && $p !== ''));
