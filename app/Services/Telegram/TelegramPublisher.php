@@ -2,6 +2,7 @@
 
 namespace App\Services\Telegram;
 
+use App\Enums\MediaVariantType;
 use App\Models\MediaAsset;
 use App\Models\TelegramChannel;
 use App\Services\Media\Storage\MediaStorageService;
@@ -27,6 +28,7 @@ class TelegramPublisher
             'chat_id' => $channel->chat_id,
             'text' => $text,
             'parse_mode' => 'HTML',
+            'link_preview_options' => json_encode(['is_disabled' => true]),
         ]);
     }
 
@@ -76,7 +78,7 @@ class TelegramPublisher
     /** Prefer the 'telegram' variant if one has already been generated; fall back to the original. */
     private function publicUrlFor(MediaAsset $asset): string
     {
-        $telegramVariant = $asset->variantOfType(\App\Enums\MediaVariantType::Telegram);
+        $telegramVariant = $asset->variantOfType(MediaVariantType::Telegram);
         $path = $telegramVariant?->storage_path ?? $asset->storage_path;
 
         return $path ? $this->storage->url($path) : $asset->original_url;
@@ -98,18 +100,41 @@ class TelegramPublisher
         $url = rtrim(config('services.telegram.api_base_uri'), '/')."/bot{$token}/{$method}";
 
         try {
-            $response = $this->client->post($url, ['form_params' => $params]);
+            $response = $this->client->post($url, ['form_params' => $params, 'http_errors' => false]);
         } catch (GuzzleException $e) {
-            throw new TelegramApiException("Telegram API transport error calling {$method}: {$e->getMessage()}", previous: $e);
+            // Exception URLs contain the bot token. Never persist the original
+            // exception or its message in queue failures/logs.
+            throw new TelegramApiException("Telegram delivery outcome unknown calling {$method}.", deliveryUnknown: true);
         }
 
         $body = json_decode((string) $response->getBody(), true) ?? [];
 
-        if (empty($body['ok'])) {
-            $description = $body['description'] ?? 'unknown error';
-            throw new TelegramApiException("Telegram API rejected {$method}: {$description}");
+        if ($response->getStatusCode() >= 500 || ! is_array($body) || ! array_key_exists('ok', $body)) {
+            throw new TelegramApiException("Telegram delivery outcome unknown calling {$method}.", deliveryUnknown: true);
         }
 
-        return $body['result'] ?? [];
+        if ($body['ok'] !== true) {
+            $description = $body['description'] ?? 'unknown error';
+            $code = (int) ($body['error_code'] ?? $response->getStatusCode());
+            throw new TelegramApiException(
+                "Telegram API rejected {$method}: ".str_replace($token, '[redacted]', $description),
+                retryAfter: $code === 429 ? max(1, (int) ($body['parameters']['retry_after'] ?? 60)) : null,
+                mediaRejected: $code === 400 && (bool) preg_match('/photo|video|media|file|image|HTTP URL/i', $description),
+            );
+        }
+
+        $result = $body['result'] ?? null;
+        $messages = $method === 'sendMediaGroup' ? $result : [$result];
+        if (! is_array($messages) || $messages === [] ||
+            ($method === 'sendMediaGroup' && count($messages) !== count(json_decode($params['media'], true)))) {
+            throw new TelegramApiException('Telegram returned an incomplete delivery receipt.', deliveryUnknown: true);
+        }
+        foreach ($messages as $message) {
+            if (! is_array($message) || empty($message['message_id'])) {
+                throw new TelegramApiException('Telegram returned an invalid delivery receipt.', deliveryUnknown: true);
+            }
+        }
+
+        return $result;
     }
 }

@@ -9,6 +9,7 @@ use App\Models\TelegramChannel;
 use App\Services\News\FreshnessPolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -100,7 +101,7 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
         }
     }
 
-    private function eligibleQuery(): \Illuminate\Database\Eloquent\Builder
+    private function eligibleQuery(): Builder
     {
         $query = NewsItem::query()
             ->whereNotNull('media_analysis_completed_at')
@@ -114,7 +115,8 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
         $freshness = app(FreshnessPolicy::class);
 
         if ($freshness->enabled()) {
-            $query->whereBetween('published_at', [$freshness->windowStart(), $freshness->windowEnd()]);
+            $query->where('published_at', '>=', $freshness->windowStart())
+                ->where('published_at', '<', $freshness->windowEnd());
         }
 
         return $query;

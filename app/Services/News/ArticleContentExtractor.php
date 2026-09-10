@@ -47,7 +47,7 @@ class ArticleContentExtractor
      */
     private function stripNonContentNodes(\DOMXPath $xpath): void
     {
-        $nodes = $xpath->query('//script | //style | //noscript | //template');
+        $nodes = $xpath->query('//script | //style | //noscript | //template | //nav | //aside | //footer | //*[@role="navigation" or @role="complementary"]');
 
         if (! $nodes) {
             return;

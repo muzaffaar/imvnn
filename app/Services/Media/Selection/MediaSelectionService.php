@@ -59,13 +59,15 @@ class MediaSelectionService
 
         // After ranking, so each surviving picture is represented by its
         // best-scoring rendition rather than an arbitrary one.
-        $usable = $this->dropDuplicateRenditions($usable);
 
         // Only now — for the few candidates of an article actually being
         // published — is it worth learning real dimensions, which is what
         // makes the resolution/aspect-ratio/Telegram-limit checks below
         // mean anything for reference-only images.
         $usable = $this->probeAndRerank($usable->take(self::PROBE_CANDIDATES));
+        $usable = $this->dropDuplicateRenditions($usable)
+            ->filter(fn (MediaAsset $asset) => $this->contextualScore($asset) >= $minQuality)
+            ->values();
 
         if ($usable->isEmpty()) {
             return PostMediaPlan::none();
@@ -88,7 +90,9 @@ class MediaSelectionService
 
         if ($newsItem->event_id) {
             foreach ($newsItem->event->mediaAssets as $asset) {
-                $pool->put($asset->id, $asset);
+                if (! $pool->has($asset->id)) {
+                    $pool->put($asset->id, $asset);
+                }
             }
         }
 
@@ -109,7 +113,7 @@ class MediaSelectionService
         $contextualRelevance = $asset->pivot?->relevance_score;
 
         if ($contextualRelevance === null) {
-            return $asset->quality_score ?? $this->qualityScorer->score($asset);
+            return $this->qualityScorer->score($asset);
         }
 
         return $this->qualityScorer->score($asset, (float) $contextualRelevance);
@@ -211,8 +215,11 @@ class MediaSelectionService
         // Reference-only or too-large video: fall back to its thumbnail (or the
         // best remaining image) as a SingleImage post, with the original video
         // linked in the caption instead of uploaded.
-        $thumbnailOrImage = $usable->first(fn (MediaAsset $a) => $a->id !== $video->id && $a->type->isVisual())
-            ?? $video;
+        $thumbnailOrImage = $usable->first(fn (MediaAsset $a) => $a->id !== $video->id && $a->type->isVisual());
+
+        if (! $thumbnailOrImage) {
+            return PostMediaPlan::none();
+        }
 
         return new PostMediaPlan(
             PostMediaType::VideoThumbnailFallback,

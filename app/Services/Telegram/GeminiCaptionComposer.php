@@ -34,7 +34,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
 
         $title = $newsItem->title ?? '';
         $body = Str::limit(strip_tags((string) $newsItem->content), config('media.telegram_caption.max_input_chars'));
-        $hasVideo = in_array($plan->type, [PostMediaType::Video, PostMediaType::VideoThumbnailFallback], true);
+        $hasVideo = $plan->type === PostMediaType::Video;
 
         $languages = self::languages();
         $response = $this->call($apiKey, $title, $body, $hasVideo, $languages);
@@ -45,7 +45,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
             $text = $this->orNull($response[$language['key']] ?? null);
 
             if ($text === null) {
-                continue;
+                throw new GeminiCaptionException("Gemini omitted the required {$language['key']} body.");
             }
 
             // Rejecting here rather than posting anyway: the job retries, so
@@ -236,9 +236,9 @@ class GeminiCaptionComposer implements CaptionComposerInterface
      * makes it safe for parse_mode=HTML. Doing it in the other order would
      * leave the sanitizer inspecting `&lt;` instead of the character itself.
      */
-    private function orNull(?string $value): ?string
+    private function orNull(mixed $value): ?string
     {
-        if ($value === null) {
+        if (! is_string($value)) {
             return null;
         }
 

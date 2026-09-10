@@ -31,6 +31,11 @@ class HtmlContentExtractor implements MediaExtractorInterface
             return collect();
         }
 
+        $xpath = new \DOMXPath($dom);
+        foreach (iterator_to_array($xpath->query('//nav | //aside | //footer | //*[@role="navigation" or @role="complementary"]')) as $node) {
+            $node->parentNode?->removeChild($node);
+        }
+
         $results = collect();
         $position = 0;
 
@@ -85,8 +90,9 @@ class HtmlContentExtractor implements MediaExtractorInterface
 
     private function fromImg(\DOMElement $img, ExtractionContext $context, int $position): ?ExtractedMedia
     {
-        $src = $img->getAttribute('srcset') ? $this->pickLargestFromSrcset($img->getAttribute('srcset')) : null;
-        $src = $src ?: ($img->getAttribute('src') ?: $img->getAttribute('data-src'));
+        $srcset = $img->getAttribute('data-srcset') ?: $img->getAttribute('srcset');
+        $src = $srcset ? $this->pickLargestFromSrcset($srcset) : null;
+        $src = $src ?: ($img->getAttribute('data-src') ?: $img->getAttribute('src'));
 
         $url = $this->resolveUrl($src, $context->baseUrl);
         if (! $url) {
@@ -174,7 +180,7 @@ class HtmlContentExtractor implements MediaExtractorInterface
         $host = parse_url($url, PHP_URL_HOST) ?: '';
 
         foreach ($videoHosts as $needle) {
-            if (str_contains($host, $needle)) {
+            if (strtolower($host) === $needle || str_ends_with(strtolower($host), '.'.$needle)) {
                 return new ExtractedMedia($url, MediaType::Embed, 'html_iframe', position: $position);
             }
         }

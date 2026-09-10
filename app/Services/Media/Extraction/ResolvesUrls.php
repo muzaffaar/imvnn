@@ -2,6 +2,9 @@
 
 namespace App\Services\Media\Extraction;
 
+use GuzzleHttp\Psr7\Uri;
+use GuzzleHttp\Psr7\UriResolver;
+
 trait ResolvesUrls
 {
     /** Resolve a possibly-relative URL against the article's base URL. */
@@ -9,35 +12,21 @@ trait ResolvesUrls
     {
         $url = trim($url);
 
-        if ($url === '' || str_starts_with($url, 'data:')) {
+        if ($url === '') {
+            return null;
+        }
+        try {
+            $resolved = UriResolver::resolve(
+                new Uri($baseUrl),
+                new Uri($url),
+            );
+        } catch (\InvalidArgumentException) {
+            return null;
+        }
+        if (! in_array($resolved->getScheme(), ['http', 'https'], true) || $resolved->getHost() === '') {
             return null;
         }
 
-        if (str_starts_with($url, '//')) {
-            $scheme = parse_url($baseUrl, PHP_URL_SCHEME) ?: 'https';
-
-            return "{$scheme}:{$url}";
-        }
-
-        if (preg_match('#^https?://#i', $url)) {
-            return $url;
-        }
-
-        $base = parse_url($baseUrl);
-        if (! $base || empty($base['host'])) {
-            return null;
-        }
-
-        $scheme = $base['scheme'] ?? 'https';
-        $host = $base['host'];
-        $port = isset($base['port']) ? ':'.$base['port'] : '';
-
-        if (str_starts_with($url, '/')) {
-            return "{$scheme}://{$host}{$port}{$url}";
-        }
-
-        $basePath = isset($base['path']) ? rtrim(dirname($base['path']), '/') : '';
-
-        return "{$scheme}://{$host}{$port}{$basePath}/{$url}";
+        return (string) $resolved;
     }
 }

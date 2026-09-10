@@ -17,6 +17,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -58,7 +59,39 @@ class PublishToTelegramJob implements ShouldQueue
                 fn (MediaAsset $a) => array_search($a->id, $this->mediaAssetIds)
             )->values();
 
-        $result = $this->attempt($publisher, $channel, $assets);
+        if (! $channel->is_active) {
+            return;
+        }
+
+        // Durable claim: queue redelivery and concurrent workers must not send
+        // again, including after a crash between Telegram acceptance and save.
+        if (! NewsItem::whereKey($this->newsItemId)
+            ->whereNull('telegram_published_at')
+            ->whereNull('telegram_publish_started_at')
+            ->update(['telegram_publish_started_at' => now()])) {
+            return;
+        }
+
+        try {
+            $result = $this->attempt($publisher, $channel, $assets);
+        } catch (TelegramApiException $e) {
+            if ($e->deliveryUnknown) {
+                $this->fail($e);
+
+                return;
+            }
+
+            NewsItem::whereKey($this->newsItemId)->update(['telegram_publish_started_at' => null]);
+            if ($e->retryAfter !== null) {
+                $this->release($e->retryAfter);
+
+                return;
+            }
+
+            throw $e;
+        }
+
+        NewsItem::whereKey($this->newsItemId)->update(['telegram_published_at' => now()]);
 
         MediaProcessingLog::record(
             ProcessingStage::Publishing, ProcessingLogStatus::Succeeded,
@@ -70,15 +103,10 @@ class PublishToTelegramJob implements ShouldQueue
             MediaAsset::whereKey($id)->update(['status' => MediaStatus::Published]);
         }
 
-        // Marks this item done for PublishNextReadyNewsItemJob's eligibility
-        // query — it was already excluded via publish_queued_at the moment it
-        // was selected, but this is what actually means "sent," including for
-        // any future per-article reporting.
-        NewsItem::whereKey($this->newsItemId)->update(['telegram_published_at' => now()]);
     }
 
     /** @return array{strategy: string, message_id: mixed, published_asset_ids: list<string>} */
-    private function attempt(TelegramPublisher $publisher, TelegramChannel $channel, \Illuminate\Support\Collection $assets): array
+    private function attempt(TelegramPublisher $publisher, TelegramChannel $channel, Collection $assets): array
     {
         if ($this->type === PostMediaType::MediaGroup && $assets->count() >= 2) {
             try {
@@ -86,6 +114,9 @@ class PublishToTelegramJob implements ShouldQueue
 
                 return ['strategy' => 'media_group', 'message_id' => $result[0]['message_id'] ?? null, 'published_asset_ids' => $assets->pluck('id')->all()];
             } catch (TelegramApiException $e) {
+                if (! $e->mediaRejected) {
+                    throw $e;
+                }
                 $this->logFallback('media_group failed, falling back to single image', $e);
             }
         }
@@ -96,6 +127,9 @@ class PublishToTelegramJob implements ShouldQueue
 
                 return ['strategy' => 'video', 'message_id' => $result['message_id'] ?? null, 'published_asset_ids' => [$assets->first()->id]];
             } catch (TelegramApiException $e) {
+                if (! $e->mediaRejected) {
+                    throw $e;
+                }
                 $this->logFallback('video send failed, falling back to thumbnail/image', $e);
             }
         }
@@ -104,11 +138,17 @@ class PublishToTelegramJob implements ShouldQueue
         // already handles mentioning a VideoThumbnailFallback's video in the
         // text itself (no link), so no special-casing is needed here.
         foreach ($assets as $asset) {
+            if (! $asset->type->isVisual()) {
+                continue;
+            }
             try {
                 $result = $publisher->sendSinglePhoto($channel, $asset, $this->caption);
 
                 return ['strategy' => 'single_image', 'message_id' => $result['message_id'] ?? null, 'published_asset_ids' => [$asset->id]];
             } catch (TelegramApiException $e) {
+                if (! $e->mediaRejected) {
+                    throw $e;
+                }
                 $this->logFallback("single image {$asset->id} failed, trying next candidate", $e);
 
                 continue;

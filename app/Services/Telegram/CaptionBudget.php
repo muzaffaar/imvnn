@@ -84,6 +84,14 @@ class CaptionBudget
             ), null, null);
         }
 
+        if (self::visibleLength($result) > $budget) {
+            // Even an unusually long source/header must fit. Flatten markup
+            // only in this pathological case, then escape after truncation.
+            $result = self::truncateAtWord(TelegramHtml::escape(
+                html_entity_decode(strip_tags($result), ENT_QUOTES | ENT_HTML5, 'UTF-8')
+            ), $budget);
+        }
+
         return $result;
     }
 
@@ -122,22 +130,31 @@ class CaptionBudget
     /** Telegram's limit applies to the parsed text, so tags don't count toward it. */
     private static function visibleLength(string $html): int
     {
-        return mb_strlen(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        return self::textLength(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
     }
 
     private static function truncateAtWord(string $text, int $maxLength): string
     {
-        if ($maxLength <= 1 || mb_strlen($text) <= $maxLength) {
-            return $maxLength <= 1 ? '' : $text;
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($maxLength <= 1 || self::textLength($text) <= $maxLength) {
+            return $maxLength <= 1 ? '' : TelegramHtml::escape($text);
         }
 
         $cut = mb_substr($text, 0, $maxLength - 1);
+        while (self::textLength($cut) > $maxLength - 1) {
+            $cut = mb_substr($cut, 0, -1);
+        }
         $lastSpace = mb_strrpos($cut, ' ');
 
         if ($lastSpace !== false && $lastSpace > $maxLength / 2) {
             $cut = mb_substr($cut, 0, $lastSpace);
         }
 
-        return rtrim($cut, " \t\n,;:—-").'…';
+        return TelegramHtml::escape(rtrim($cut, " \t\n,;:—-").'…');
+    }
+
+    private static function textLength(string $text): int
+    {
+        return intdiv(strlen(mb_convert_encoding($text, 'UTF-16LE', 'UTF-8')), 2);
     }
 }
