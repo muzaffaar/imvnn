@@ -6,6 +6,7 @@ use App\Enums\MediaStatus;
 use App\Jobs\Media\SelectMediaForPublishingJob;
 use App\Models\NewsItem;
 use App\Models\TelegramChannel;
+use App\Services\News\FreshnessPolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -101,10 +102,22 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
 
     private function eligibleQuery(): \Illuminate\Database\Eloquent\Builder
     {
-        return NewsItem::query()
+        $query = NewsItem::query()
             ->whereNotNull('media_analysis_completed_at')
             ->whereNull('publish_queued_at')
             ->whereNull('telegram_published_at');
+
+        // Only today's news, and only today — an article whose day has passed
+        // is abandoned rather than carried over, so the channel never wakes up
+        // to yesterday's headlines. This also keeps the backlog count honest,
+        // since that count drives the posting cadence.
+        $freshness = app(FreshnessPolicy::class);
+
+        if ($freshness->enabled()) {
+            $query->whereBetween('published_at', [$freshness->windowStart(), $freshness->windowEnd()]);
+        }
+
+        return $query;
     }
 
     private function pickBestCandidate(): ?NewsItem

@@ -36,19 +36,28 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         $body = Str::limit(strip_tags((string) $newsItem->content), config('media.telegram_caption.max_input_chars'));
         $hasVideo = in_array($plan->type, [PostMediaType::Video, PostMediaType::VideoThumbnailFallback], true);
 
-        $response = $this->call($apiKey, $title, $body, $hasVideo);
+        $languages = self::languages();
+        $response = $this->call($apiKey, $title, $body, $hasVideo, $languages);
 
-        $uzbek = $this->orNull($response['uzbek'] ?? null);
-        $russian = $this->orNull($response['russian'] ?? null);
+        $sections = [];
 
-        if (! $uzbek && ! $russian) {
-            throw new GeminiCaptionException('Gemini caption response had no usable text.');
+        foreach ($languages as $language) {
+            $text = $this->orNull($response[$language['key']] ?? null);
+
+            if ($text === null) {
+                continue;
+            }
+
+            $sections[] = [
+                'flag' => $language['flag'] ?? null,
+                'title' => $this->orNull($response[$language['key'].'_title'] ?? null),
+                'body' => $text,
+            ];
         }
 
-        $sections = array_values(array_filter([
-            $uzbek ? ['flag' => '🇺🇿', 'title' => $this->orNull($response['uzbek_title'] ?? null), 'body' => $uzbek] : null,
-            $russian ? ['flag' => '🇷🇺', 'title' => $this->orNull($response['russian_title'] ?? null), 'body' => $russian] : null,
-        ]));
+        if ($sections === []) {
+            throw new GeminiCaptionException('Gemini caption response had no usable text.');
+        }
 
         return CaptionBudget::assemble(
             PostHeader::render($newsItem),
@@ -58,28 +67,41 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         );
     }
 
-    /** @return array{uzbek_title: ?string, uzbek: ?string, russian_title: ?string, russian: ?string, hashtags: list<string>} */
-    private function call(string $apiKey, string $title, string $body, bool $hasVideo): array
+    /** @return list<array{key: string, name: string, flag: ?string}> */
+    public static function languages(): array
+    {
+        return config('media.telegram_caption.languages', [
+            ['key' => 'russian', 'name' => 'Russian', 'flag' => null],
+        ]);
+    }
+
+    /** @param list<array{key: string, name: string, flag: ?string}> $languages */
+    private function call(string $apiKey, string $title, string $body, bool $hasVideo, array $languages): array
     {
         $model = config('services.gemini.model');
         $videoNote = $hasVideo ? "\n\nNote: a video is attached to this post — you may naturally mention that, but do not describe it as a link." : '';
 
+        $names = array_column($languages, 'name');
+        $count = count($names);
+        $languageList = $count === 1 ? $names[0] : implode(' and ', [implode(', ', array_slice($names, 0, -1)), end($names)]);
+        $postWord = $count === 1 ? 'ONE short post' : $count.' short posts';
+        $sharedNote = $count === 1
+            ? 'Staying within this length matters: it must fit a 1024-character Telegram caption or it gets trimmed.'
+            : 'Staying within these lengths matters: the posts share a single 1024-character Telegram caption and anything over it gets trimmed.';
+
         $prompt = <<<PROMPT
-            You are writing a post for a Telegram news channel about AI, read by an
-            Uzbek- and Russian-speaking audience.
+            You are writing a post for a Telegram news channel about AI, read by a
+            {$languageList}-speaking audience.
 
             Article title: {$title}
 
             Article summary: {$body}{$videoNote}
 
-            Write TWO short posts (2-3 sentences, at most 320 characters each)
-            that clearly and accurately summarize this story for a general
-            audience — one in Uzbek, one in Russian. They don't need to be
-            literal translations of each other, but both must convey the same
-            key facts. Give each one a short, punchy headline (under 70
-            characters) in its own language. Staying within these lengths
-            matters: the two posts share a single 1024-character Telegram
-            caption and anything over it gets trimmed.
+            Write {$postWord} (2-3 sentences, at most 320 characters each) that
+            clearly and accurately summarize this story for a general audience,
+            in: {$languageList}. Write ONLY in the requested language(s) — no
+            English. Give each one a short, punchy headline (under 70
+            characters) in its own language. {$sharedNote}
 
             Match whatever tone genuinely fits the story — formal, humorous,
             dramatic, warm, or serious — rather than forcing one fixed style. Emoji
@@ -99,17 +121,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
                 'maxOutputTokens' => config('media.telegram_caption.max_output_tokens'),
                 'temperature' => 0.7,
                 'responseMimeType' => 'application/json',
-                'responseSchema' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'uzbek_title' => ['type' => 'string'],
-                        'uzbek' => ['type' => 'string'],
-                        'russian_title' => ['type' => 'string'],
-                        'russian' => ['type' => 'string'],
-                        'hashtags' => ['type' => 'array', 'items' => ['type' => 'string']],
-                    ],
-                    'required' => ['uzbek_title', 'uzbek', 'russian_title', 'russian', 'hashtags'],
-                ],
+                'responseSchema' => $this->responseSchema($languages),
             ],
         ];
 
@@ -137,6 +149,31 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         }
 
         return $decoded;
+    }
+
+    /**
+     * Built from the configured languages so the schema, the prompt and the
+     * assembled caption can't fall out of step when a language is added or
+     * removed.
+     *
+     * @param  list<array{key: string, name: string, flag: ?string}>  $languages
+     */
+    private function responseSchema(array $languages): array
+    {
+        $properties = [];
+
+        foreach ($languages as $language) {
+            $properties[$language['key'].'_title'] = ['type' => 'string'];
+            $properties[$language['key']] = ['type' => 'string'];
+        }
+
+        $properties['hashtags'] = ['type' => 'array', 'items' => ['type' => 'string']];
+
+        return [
+            'type' => 'object',
+            'properties' => $properties,
+            'required' => array_keys($properties),
+        ];
     }
 
     private function orNull(?string $value): ?string

@@ -96,6 +96,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Freshness — only today's news
+    |--------------------------------------------------------------------------
+    |
+    | Feeds carry far more history than they look like they do: the newest 20
+    | items of a low-volume company blog can still stretch back months, which
+    | is how a May article once got posted in September. With `only_today`
+    | on, an article is ingested and published only on the calendar day it
+    | was published, in the audience's timezone — anything not posted before
+    | midnight is abandoned rather than carried over. Articles whose date
+    | can't be determined at all count as not fresh.
+    |
+    | See App\Services\News\FreshnessPolicy.
+    */
+    'freshness' => [
+        'only_today' => env('NEWS_ONLY_TODAY', true),
+        'timezone' => env('NEWS_DAY_TIMEZONE', 'Asia/Tashkent'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Gemini article analysis
     |--------------------------------------------------------------------------
     |

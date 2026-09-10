@@ -24,6 +24,7 @@ class NewsIngestionService
         private readonly ArticleAnalyzerInterface $articleAnalyzer,
         private readonly AiRelevanceFilter $prefilter,
         private readonly UrlNormalizer $urlNormalizer,
+        private readonly FreshnessPolicy $freshness,
     ) {}
 
     /** @return NewsItem|null null if the candidate was skipped (irrelevant, duplicate, or unfetchable) */
@@ -42,6 +43,14 @@ class NewsIngestionService
             return null;
         }
 
+        // RSS candidates carry a date from the feed, so most stale articles
+        // can be dropped here — before spending an HTTP fetch and a Gemini
+        // call on something that could never be published anyway. Crawled
+        // candidates have no date yet and are re-checked after parsing.
+        if ($candidate->publishedAt !== null && ! $this->freshness->isFresh($candidate->publishedAt)) {
+            return null;
+        }
+
         $rawHtml = $candidate->rawHtml;
 
         if ($rawHtml === null) {
@@ -56,6 +65,15 @@ class NewsIngestionService
         // producing the title/content/relevance verdict below.
         $heuristicParse = $this->contentExtractor->extract($rawHtml);
         $publishedAt = $heuristicParse->publishedAt ?? $candidate->publishedAt;
+
+        // Authoritative freshness gate: for crawled candidates this is the
+        // first point a date exists at all, and it still runs before the
+        // Gemini call.
+        if (! $this->freshness->isFresh($publishedAt)) {
+            Log::info("[news-ingestion] skipped as not from today ({$candidate->url}), published_at=".($publishedAt?->toDateString() ?? 'unknown'));
+
+            return null;
+        }
 
         $analysis = $this->articleAnalyzer->analyze($candidate, $heuristicParse, $rawHtml);
 

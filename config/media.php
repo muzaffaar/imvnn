@@ -180,6 +180,23 @@ return [
         // audience's local time, not the app's UTC storage timezone.
         'display_timezone' => env('TELEGRAM_DISPLAY_TIMEZONE', 'Asia/Tashkent'),
 
+        // Languages each post is written in, in order. Drives the Gemini
+        // response schema and the assembled caption, so adding or removing a
+        // language is a config change rather than a code change. `flag` is
+        // optional and only worth setting when there's more than one language
+        // to tell apart. Note each extra language competes for the same
+        // 1024-character caption budget (see CaptionBudget).
+        'languages' => [
+            ['key' => 'russian', 'name' => 'Russian', 'flag' => null],
+        ],
+
+        // When Gemini can't produce a caption, the only fallback is the
+        // article's own words — i.e. the source's language, usually English.
+        // Off by default: for a channel that publishes in specific languages,
+        // not posting beats posting untranslated. Turn on only if getting
+        // something out matters more than the language it's in.
+        'fallback_to_original_language' => env('TELEGRAM_CAPTION_FALLBACK_ORIGINAL', false),
+
         'gemini_enabled' => env('GEMINI_CAPTION_ENABLED', true),
         'max_output_tokens' => env('GEMINI_CAPTION_MAX_OUTPUT_TOKENS', 400),
         'max_input_chars' => env('GEMINI_CAPTION_MAX_INPUT_CHARS', 4000),
