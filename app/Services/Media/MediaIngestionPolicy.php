@@ -36,6 +36,10 @@ class MediaIngestionPolicy
             return MediaIngestionAction::Ignore;
         }
 
+        if ($this->isUnpublishableFormat($media)) {
+            return MediaIngestionAction::Ignore;
+        }
+
         // Conservative default: without an explicit reuse permission from the
         // source, never copy bytes for anything but our own thumbnails — a real
         // deployment should get per-source guidance from legal/licensing here,
@@ -49,6 +53,19 @@ class MediaIngestionPolicy
             MediaType::Document => MediaIngestionAction::Download,
             default => MediaIngestionAction::Reference,
         };
+    }
+
+    /**
+     * Formats Telegram can't render as a photo. Worth rejecting at ingestion
+     * rather than at selection: a single research.google article links ~25
+     * `*_nav.svg` menu icons, and each one otherwise becomes a media_assets
+     * row that gets scored, stored and ranked before ever being discarded.
+     */
+    private function isUnpublishableFormat(ExtractedMedia $media): bool
+    {
+        $extension = strtolower(pathinfo(parse_url($media->url, PHP_URL_PATH) ?? '', PATHINFO_EXTENSION));
+
+        return in_array($extension, ['svg', 'svgz', 'ico', 'bmp', 'tif', 'tiff'], true);
     }
 
     private function belowMinimumDimensions(ExtractedMedia $media): bool

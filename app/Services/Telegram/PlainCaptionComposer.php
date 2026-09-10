@@ -16,16 +16,15 @@ class PlainCaptionComposer implements CaptionComposerInterface
 {
     public function compose(NewsItem $newsItem, PostMediaPlan $plan): string
     {
-        $title = TelegramHtml::escape($newsItem->title);
-        $excerpt = $this->excerpt($newsItem->content);
-
-        $lines = ["📰 <b>{$title}</b>", ''];
-
-        if ($excerpt) {
-            $lines[] = $excerpt;
-        }
-
-        return trim(implode("\n", $lines));
+        return CaptionBudget::assemble(
+            PostHeader::render($newsItem),
+            [[
+                'title' => TelegramHtml::escape($newsItem->title),
+                'body' => $this->excerpt($newsItem->content) ?? '',
+            ]],
+            null,
+            CaptionBudget::limitFor($plan),
+        );
     }
 
     private function excerpt(?string $content, int $maxLength = 500): ?string

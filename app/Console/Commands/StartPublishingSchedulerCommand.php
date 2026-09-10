@@ -8,11 +8,9 @@ use Illuminate\Console\Command;
 
 /**
  * Starts the self-perpetuating publishing scheduler for a channel (see
- * PublishNextReadyNewsItemJob). Run this ONCE per channel — running it again
- * while a chain is already active starts a second, independent chain
- * running in parallel (each one still only ever claims a given article
- * exactly once, so the effect is just "posts roughly twice as often," not
- * duplicate posts of the same article).
+ * PublishNextReadyNewsItemJob). Safe to run repeatedly: each run mints a
+ * fresh chain token, and any chain still running under an older token
+ * retires itself on its next run instead of posting alongside the new one.
  */
 class StartPublishingSchedulerCommand extends Command
 {
@@ -30,11 +28,12 @@ class StartPublishingSchedulerCommand extends Command
             return self::FAILURE;
         }
 
-        PublishNextReadyNewsItemJob::dispatch($channel->id);
+        PublishNextReadyNewsItemJob::startChain($channel);
 
         $min = $channel->rule('min_publish_interval_minutes', 15);
         $max = $channel->rule('max_publish_interval_minutes', 120);
-        $this->info("Publishing scheduler started for '{$channel->name}' (random {$min}-{$max} min between posts).");
+        $this->info("Publishing scheduler started for '{$channel->name}' ({$max} min baseline, down to {$min} min when a backlog builds up).");
+        $this->line('Any previously running chain for this channel will retire on its next run.');
 
         return self::SUCCESS;
     }

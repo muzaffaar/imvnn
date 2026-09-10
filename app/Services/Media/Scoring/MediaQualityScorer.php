@@ -27,11 +27,21 @@ class MediaQualityScorer
         private readonly TelegramCompatibilityChecker $telegramChecker,
     ) {}
 
-    public function score(MediaAsset $asset): float
+    /**
+     * @param  float|null  $relevanceOverride  this-context relevance (e.g. the
+     *   news_media pivot's per-article score). `MediaAsset::relevance_score`
+     *   caches the *best* relevance seen across every article the asset
+     *   appears in, which is the wrong number for ranking within one specific
+     *   article: a sidebar "related posts" image that is the featured image of
+     *   its own article carries that high cached score into every article that
+     *   merely links it, and can outrank the article's real figures. Pass the
+     *   contextual score whenever one exists — see MediaSelectionService.
+     */
+    public function score(MediaAsset $asset, ?float $relevanceOverride = null): float
     {
         $weights = config('media.quality_weights');
 
-        $relevance = $asset->relevance_score ?? 0.5;
+        $relevance = $relevanceOverride ?? $asset->relevance_score ?? 0.5;
         $resolution = $this->resolutionScore($asset);
         $visualQuality = $this->visualQualityScore($asset);
         $sourceReliability = $asset->source?->reliabilityScoreNormalized() ?? 0.5;

@@ -176,6 +176,10 @@ return [
     | docs/NEWS_FETCHING.md "Token/cost limits".
     */
     'telegram_caption' => [
+        // Timezone the post's date/time header is rendered in — the channel's
+        // audience's local time, not the app's UTC storage timezone.
+        'display_timezone' => env('TELEGRAM_DISPLAY_TIMEZONE', 'Asia/Tashkent'),
+
         'gemini_enabled' => env('GEMINI_CAPTION_ENABLED', true),
         'max_output_tokens' => env('GEMINI_CAPTION_MAX_OUTPUT_TOKENS', 400),
         'max_input_chars' => env('GEMINI_CAPTION_MAX_INPUT_CHARS', 4000),

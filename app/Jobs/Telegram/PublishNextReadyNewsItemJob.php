@@ -11,18 +11,30 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * The publishing scheduler: picks the single best ready-and-unpublished
  * article for a channel, dispatches it, then reschedules itself — so even
  * with several good candidates backlogged, the channel only ever gets one
- * post at a time, never a burst. Started once per channel via
+ * post at a time, never a burst. Started per channel via
  * `php artisan publishing:start {channel}` (see
  * StartPublishingSchedulerCommand); from then on it keeps itself alive
  * forever via the `finally` block below, regardless of whether a candidate
  * was found or the attempt succeeded.
+ *
+ * Exactly one chain runs per channel, enforced by
+ * `telegram_channels.publish_chain_token`: every run carries the token it
+ * was dispatched with and exits *without* rescheduling once that token no
+ * longer matches the channel's current one. Chains fork more easily than
+ * you'd expect — force-killing a worker mid-job leaves the job reserved,
+ * and Laravel re-runs it after `retry_after`, so the interrupted run's
+ * `finally` reschedules a second chain alongside the one it had already
+ * dispatched (observed: three concurrent chains after two worker restarts,
+ * which would have tripled the posting rate). Re-running `publishing:start`
+ * is therefore safe and idempotent — it mints a new token, and every older
+ * chain retires itself on its next run.
  *
  * Cadence: `max_publish_interval_minutes` (default 120 = 2h) is the
  * baseline — with nothing else waiting, that's the wait before the next
@@ -43,14 +55,34 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
     // failed attempt must not multiply into extra parallel chains via retry.
     public int $tries = 1;
 
-    public function __construct(public readonly int $telegramChannelId)
-    {
+    public function __construct(
+        public readonly int $telegramChannelId,
+        public readonly string $chainToken,
+    ) {
         $this->onQueue(config('media.queues.selection'));
+    }
+
+    public static function startChain(TelegramChannel $channel): string
+    {
+        $token = (string) Str::uuid();
+        $channel->forceFill(['publish_chain_token' => $token])->save();
+
+        self::dispatch($channel->id, $token);
+
+        return $token;
     }
 
     public function handle(): void
     {
         $channel = TelegramChannel::find($this->telegramChannelId);
+
+        if ($channel && $channel->publish_chain_token !== $this->chainToken) {
+            // A newer chain owns this channel — retire quietly, without
+            // rescheduling, so forked chains collapse back to one.
+            Log::info("[publishing-scheduler] channel={$channel->id} stale chain retired");
+
+            return;
+        }
 
         try {
             if (! $channel || ! $channel->is_active) {
@@ -111,7 +143,7 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
 
         $delaySeconds = $this->computeDelaySeconds($minMinutes, $maxMinutes, $backlogCount, $channel);
 
-        self::dispatch($channel->id)->delay(now()->addSeconds($delaySeconds));
+        self::dispatch($channel->id, $this->chainToken)->delay(now()->addSeconds($delaySeconds));
 
         Log::info("[publishing-scheduler] channel={$channel->id} backlog={$backlogCount} next check in {$delaySeconds}s");
     }

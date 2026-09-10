@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class TelegramChannel extends Model
 {
-    protected $fillable = ['name', 'chat_id', 'is_active', 'rules'];
+    protected $fillable = ['name', 'chat_id', 'is_active', 'rules', 'publish_chain_token'];
 
     protected function casts(): array
     {
