@@ -164,7 +164,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | Optional: GeminiCaptionComposer writes the actual post text — a short,
-    | bilingual (Uzbek + Russian) summary in whatever tone fits the story,
+    | strictly Uzbek summary in whatever tone fits the story,
     | no links — instead of the free PlainCaptionComposer (title + excerpt,
     | original language, no translation). Disabled automatically if
     | GEMINI_API_KEY is empty. Any Gemini failure falls back to
@@ -190,7 +190,7 @@ return [
         // answered in the requested language rather than drifting to English
         // (see CaptionText::matchesScript).
         'languages' => [
-            ['key' => 'russian', 'name' => 'Russian', 'flag' => null, 'script' => 'Cyrillic'],
+            ['key' => 'uzbek', 'name' => 'Uzbek', 'flag' => null, 'script' => 'Latin'],
         ],
 
         // One short witty line reacting to the story, under the summary.

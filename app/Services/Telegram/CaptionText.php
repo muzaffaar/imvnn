@@ -17,10 +17,9 @@ class CaptionText
 
     /**
      * Minimum share of letters that must belong to the expected script.
-     * Deliberately lenient: real Russian AI coverage is full of Latin
-     * product names ("GPT-5", "OpenAI", "Hugging Face"), so this is meant
-     * to catch a reply that came back essentially in English, not to police
-     * the occasional borrowed word.
+     * Deliberately lenient: Uzbek AI coverage naturally includes Latin-script
+     * product names ("GPT-5", "OpenAI", "Hugging Face"), so this rejects a
+     * clearly wrong script without policing the occasional borrowed word.
      */
     private const MIN_SCRIPT_RATIO = 0.5;
 

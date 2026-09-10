@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * What SelectMediaForPublishingJob actually depends on. Tries Gemini (for a
- * bilingual, emotionally-appropriate summary) only when configured, and
+ * target-language, emotionally-appropriate summary) only when configured, and
  * falls back to the free, single-language PlainCaptionComposer on any
  * failure — same never-break-the-pipeline principle as
  * App\Services\News\FallbackArticleAnalyzer.

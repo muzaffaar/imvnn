@@ -11,8 +11,8 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Writes the actual post text with Gemini: a short, engaging, bilingual
- * (Uzbek + Russian) summary whose tone is whatever genuinely fits the
+ * Writes the actual post text with Gemini: a short, engaging Uzbek-language
+ * summary whose tone is whatever genuinely fits the
  * story — factual, warm, funny, dramatic — rather than one fixed register.
  * No links, no "read more" — this is meant to be the whole post, not a
  * teaser pointing elsewhere.
@@ -110,7 +110,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
     public static function languages(): array
     {
         return config('media.telegram_caption.languages', [
-            ['key' => 'russian', 'name' => 'Russian', 'flag' => null],
+            ['key' => 'uzbek', 'name' => 'Uzbek', 'flag' => null, 'script' => 'Latin'],
         ]);
     }
 
@@ -127,6 +127,16 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         $sharedNote = $count === 1
             ? 'Staying within this length matters: it must fit a 1024-character Telegram caption or it gets trimmed.'
             : 'Staying within these lengths matters: the posts share a single 1024-character Telegram caption and anything over it gets trimmed.';
+        $languageRequirement = $count === 1 && ($languages[0]['key'] ?? null) === 'uzbek'
+            ? <<<'RULE'
+                Uzbek is mandatory. Write every generated field — the headline,
+                post body, funny_line, and hashtags — in standard Uzbek using the
+                Latin alphabet. Do not write English or Russian, and do not use
+                Cyrillic. Translate ordinary terms into Uzbek. Keep an original
+                spelling only for proper names, brands, product names, acronyms,
+                numbers, or dates where translating would reduce accuracy.
+                RULE
+            : "Write ONLY in the requested language(s) — no English.";
 
         $prompt = <<<PROMPT
             You are writing a post for a Telegram news channel about AI, read by a
@@ -138,8 +148,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
 
             Write {$postWord} (2-3 sentences, at most 320 characters each) that
             clearly and accurately summarize this story for a general audience,
-            in: {$languageList}. Write ONLY in the requested language(s) — no
-            English. Give each one a short, punchy headline (under 70
+            in: {$languageList}. {$languageRequirement} Give each one a short, punchy headline (under 70
             characters) in its own language. {$sharedNote}
 
             Match whatever tone genuinely fits the story — formal, dramatic,

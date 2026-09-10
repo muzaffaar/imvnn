@@ -372,11 +372,12 @@ stand on its own rather than tease a click. `PostHeader` renders the shared
 source/time/hashtag pieces so the Gemini and plain composers can't drift
 apart in appearance.
 
-Languages come from `media.telegram_caption.languages` (currently Russian
-only) rather than being hardcoded: that list drives the Gemini response
-schema, the prompt, and the assembled sections together, so adding or
-removing a language can't leave the three out of step. Each extra language
-competes for the same 1024-character caption budget.
+Languages come from `media.telegram_caption.languages` (currently Uzbek,
+Latin script) rather than being hardcoded: that list drives the Gemini
+response schema, the prompt, and the assembled sections together. The Uzbek
+prompt explicitly prohibits Russian, English, and Cyrillic apart from exact
+proper names, brands, product names, acronyms, numbers, and dates. Each extra
+language would compete for the same 1024-character caption budget.
 
 When Gemini can't produce a caption, the only fallback is the article's own
 words — i.e. the source's language, usually English. For a channel that
