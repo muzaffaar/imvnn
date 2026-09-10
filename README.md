@@ -18,7 +18,7 @@ drops every table including the channel and all publish history:
 
 ```
 composer install
-cp .env.example .env   # then fill in DB_*, TELEGRAM_BOT_TOKEN, GEMINI_API_KEY
+cp .env.example .env   # then fill in DB_*, TELEGRAM_BOT_TOKEN, AI_API_KEY
 php artisan key:generate
 php artisan migrate
 
@@ -55,11 +55,11 @@ see `App\Services\News\AiRelevanceFilter`. `news:fetch` is also scheduled
 automatically every `fetch_interval_minutes` (see `routes/console.php`), so
 once sources are synced and workers are running, fetching happens on its own.
 
-**Optional: set `GEMINI_API_KEY` in `.env`** to have Gemini parse each
+**Optional: configure an AI provider in `.env`** to have it parse each
 article and judge its AI-relevance (instead of the free heuristic
 parser + keyword filter) — see
 [`docs/NEWS_FETCHING.md`](docs/NEWS_FETCHING.md#ai-relevance-filtering-and-analysis)
-for cost limits and fallback behavior. Leave it empty to skip Gemini entirely.
+for cost limits and fallback behavior. Leave it empty to skip AI analysis entirely.
 
 ## Running the pipeline
 

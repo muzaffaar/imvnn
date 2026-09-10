@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
 /**
  * Free, deterministic, always-succeeds fallback: title + excerpt, in
  * whatever language the article/analysis produced (not translated — that
- * needs Gemini, see GeminiCaptionComposer). No links: the post is meant to
+ * needs an AI provider, see AiCaptionComposer). No links: the post is meant to
  * stand on its own as a summary, not point back to a source URL.
  */
 class PlainCaptionComposer implements CaptionComposerInterface

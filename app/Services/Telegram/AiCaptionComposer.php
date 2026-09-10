@@ -5,39 +5,29 @@ namespace App\Services\Telegram;
 use App\DTOs\PostMediaPlan;
 use App\Enums\PostMediaType;
 use App\Models\NewsItem;
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
-use Illuminate\Support\Facades\Log;
+use App\Services\Ai\AiProviderException;
+use App\Services\Ai\StructuredOutputClientInterface;
 use Illuminate\Support\Str;
 
 /**
- * Writes the actual post text with Gemini: a short, engaging Uzbek-language
- * summary whose tone is whatever genuinely fits the
- * story — factual, warm, funny, dramatic — rather than one fixed register.
- * No links, no "read more" — this is meant to be the whole post, not a
- * teaser pointing elsewhere.
+ * Writes the actual post text with the configured AI provider: a short,
+ * engaging Uzbek-language summary whose tone genuinely fits the story.
  *
- * Cost bounded the same way as GeminiArticleAnalyzer (see
- * docs/NEWS_FETCHING.md "Token/cost limits"): input truncated, output
- * capped via maxOutputTokens, no cross-request budget tracking.
+ * Input is truncated and output is capped so the provider cost and latency
+ * remain bounded. The transport is intentionally delegated to the provider
+ * client, so this class is independent of Gemini, OpenAI, or a local server.
  */
-class GeminiCaptionComposer implements CaptionComposerInterface
+class AiCaptionComposer implements CaptionComposerInterface
 {
-    public function __construct(private readonly Client $client) {}
+    public function __construct(private readonly StructuredOutputClientInterface $client) {}
 
     public function compose(NewsItem $newsItem, PostMediaPlan $plan): string
     {
-        $apiKey = config('services.gemini.api_key');
-        if (empty($apiKey)) {
-            throw new GeminiCaptionException('GEMINI_API_KEY is not configured.');
-        }
-
         $title = $newsItem->title ?? '';
         $body = Str::limit(strip_tags((string) $newsItem->content), config('media.telegram_caption.max_input_chars'));
         $hasVideo = $plan->type === PostMediaType::Video;
-
         $languages = self::languages();
-        $response = $this->call($apiKey, $title, $body, $hasVideo, $languages);
+        $response = $this->call($title, $body, $hasVideo, $languages);
 
         $sections = [];
 
@@ -45,18 +35,17 @@ class GeminiCaptionComposer implements CaptionComposerInterface
             $text = $this->orNull($response[$language['key']] ?? null);
 
             if ($text === null) {
-                throw new GeminiCaptionException("Gemini omitted the required {$language['key']} body.");
+                throw new AiProviderException("AI provider omitted the required {$language['key']} body.");
             }
 
-            // Rejecting here rather than posting anyway: the job retries, so
-            // a one-off bad generation costs a delay, whereas an English or
-            // half-empty post is visible to every reader.
+            // Reject a wrong-language answer and let the job retry; publishing
+            // English or Cyrillic text would violate the channel requirement.
             if (! CaptionText::isLongEnough($text)) {
-                throw new GeminiCaptionException("Gemini returned too short a body for {$language['key']}.");
+                throw new AiProviderException("AI provider returned too short a body for {$language['key']}.");
             }
 
             if (! CaptionText::matchesScript($text, $language['script'] ?? null)) {
-                throw new GeminiCaptionException("Gemini did not answer in {$language['name']}.");
+                throw new AiProviderException("AI provider did not answer in {$language['name']}.");
             }
 
             $sections[] = [
@@ -67,7 +56,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         }
 
         if ($sections === []) {
-            throw new GeminiCaptionException('Gemini caption response had no usable text.');
+            throw new AiProviderException('AI caption response had no usable text.');
         }
 
         return CaptionBudget::assemble(
@@ -80,13 +69,6 @@ class GeminiCaptionComposer implements CaptionComposerInterface
     }
 
     /**
-     * The witty one-liner, rendered as its own italic line so it reads as
-     * commentary rather than as part of the reported facts. One per post,
-     * in the primary language. Returns null — silently — when the model
-     * returned nothing usable, answered in the wrong language, or ran long:
-     * a missing quip is never worth failing a post over, and the prompt
-     * explicitly allows an empty string when nothing genuinely funny fits.
-     *
      * @param  array{key?: string, name?: string, flag?: ?string, script?: ?string}  $language
      */
     private function humorLine(mixed $funnyLine, array $language): ?string
@@ -115,11 +97,9 @@ class GeminiCaptionComposer implements CaptionComposerInterface
     }
 
     /** @param list<array{key: string, name: string, flag: ?string}> $languages */
-    private function call(string $apiKey, string $title, string $body, bool $hasVideo, array $languages): array
+    private function call(string $title, string $body, bool $hasVideo, array $languages): array
     {
-        $model = config('services.gemini.model');
         $videoNote = $hasVideo ? "\n\nNote: a video is attached to this post — you may naturally mention that, but do not describe it as a link." : '';
-
         $names = array_column($languages, 'name');
         $count = count($names);
         $languageList = $count === 1 ? $names[0] : implode(' and ', [implode(', ', array_slice($names, 0, -1)), end($names)]);
@@ -136,7 +116,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
                 spelling only for proper names, brands, product names, acronyms,
                 numbers, or dates where translating would reduce accuracy.
                 RULE
-            : "Write ONLY in the requested language(s) — no English.";
+            : 'Write ONLY in the requested language(s) — no English.';
 
         $prompt = <<<PROMPT
             You are writing a post for a Telegram news channel about AI, read by a
@@ -177,49 +157,17 @@ class GeminiCaptionComposer implements CaptionComposerInterface
             added separately.
             PROMPT;
 
-        $requestBody = [
-            'contents' => [['parts' => [['text' => $prompt]]]],
-            'generationConfig' => [
-                'maxOutputTokens' => config('media.telegram_caption.max_output_tokens'),
-                'temperature' => 0.7,
-                'responseMimeType' => 'application/json',
-                'responseSchema' => $this->responseSchema($languages),
-            ],
-        ];
-
-        try {
-            $response = $this->client->post("v1beta/models/{$model}:generateContent", [
-                'query' => ['key' => $apiKey],
-                'json' => $requestBody,
-                'timeout' => config('media.telegram_caption.timeout_seconds'),
-            ]);
-        } catch (GuzzleException $e) {
-            throw new GeminiCaptionException("Gemini caption request failed: {$e->getMessage()}", previous: $e);
-        }
-
-        $payload = json_decode((string) $response->getBody(), true);
-        $this->logUsage($payload['usageMetadata'] ?? []);
-
-        $text = $payload['candidates'][0]['content']['parts'][0]['text'] ?? null;
-        if (! $text) {
-            throw new GeminiCaptionException('Gemini caption response had no candidate text.');
-        }
-
-        $decoded = json_decode($text, true);
-        if (! is_array($decoded)) {
-            throw new GeminiCaptionException('Gemini caption response was not the expected JSON shape.');
-        }
-
-        return $decoded;
+        return $this->client->generate(
+            operation: 'caption',
+            prompt: $prompt,
+            schema: $this->responseSchema($languages),
+            maxOutputTokens: (int) config('media.telegram_caption.max_output_tokens'),
+            temperature: 0.7,
+            timeoutSeconds: (int) config('media.telegram_caption.timeout_seconds'),
+        );
     }
 
-    /**
-     * Built from the configured languages so the schema, the prompt and the
-     * assembled caption can't fall out of step when a language is added or
-     * removed.
-     *
-     * @param  list<array{key: string, name: string, flag: ?string}>  $languages
-     */
+    /** @param list<array{key: string, name: string, flag: ?string}> $languages */
     private function responseSchema(array $languages): array
     {
         $properties = [];
@@ -239,12 +187,6 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         ];
     }
 
-    /**
-     * Sanitize before escaping: CaptionText strips invisible/control
-     * characters and caps emoji on the raw text, while TelegramHtml::escape
-     * makes it safe for parse_mode=HTML. Doing it in the other order would
-     * leave the sanitizer inspecting `&lt;` instead of the character itself.
-     */
     private function orNull(mixed $value): ?string
     {
         if (! is_string($value)) {
@@ -254,18 +196,5 @@ class GeminiCaptionComposer implements CaptionComposerInterface
         $value = CaptionText::sanitize($value);
 
         return $value !== '' ? TelegramHtml::escape($value) : null;
-    }
-
-    private function logUsage(array $usage): void
-    {
-        if (empty($usage)) {
-            return;
-        }
-
-        Log::info('[gemini-caption] token usage', [
-            'prompt_tokens' => $usage['promptTokenCount'] ?? null,
-            'output_tokens' => $usage['candidatesTokenCount'] ?? null,
-            'total_tokens' => $usage['totalTokenCount'] ?? null,
-        ]);
     }
 }

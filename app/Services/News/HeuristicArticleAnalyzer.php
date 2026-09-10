@@ -10,7 +10,7 @@ use App\DTOs\RawArticleCandidate;
  * The free, deterministic, always-succeeds default: reuses whatever
  * ArticleContentExtractor already parsed, and the keyword AiRelevanceFilter
  * for the relevance judgment. Never throws — this is also the fallback
- * FallbackArticleAnalyzer lands on when Gemini is disabled or fails.
+ * FallbackArticleAnalyzer lands on when the AI provider is disabled or fails.
  */
 class HeuristicArticleAnalyzer implements ArticleAnalyzerInterface
 {

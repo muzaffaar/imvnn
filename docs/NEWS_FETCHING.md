@@ -70,7 +70,7 @@ lists mix the two:
   (default 20, newest-first per feed convention) — some real feeds carry a
   large historical backlog (confirmed: `huggingface.co/blog/feed.xml` has
   860 items, `research.google`'s has 100), and the cap keeps a new source's
-  first sync from triggering hundreds of Gemini calls in one burst. Items
+  first sync from triggering hundreds of AI calls in one burst. Items
   already past the cap at first sync are never retroactively processed —
   intentional; the goal is ongoing new content, not backfilling a blog's
   full history.
@@ -179,7 +179,7 @@ Two layers, in order:
    fetch of the article page: title + summary for RSS candidates, or just
    the anchor text for `html_crawl` candidates (the only signal available
    before visiting the page). Matters most for crawled sources, where it
-   avoids spending a fetch — or a Gemini call — on every discovered link.
+   avoids spending a fetch — or an AI call — on every discovered link.
    Matching is case-insensitive, word-boundary (`\b...\b`) regex against
    `config('news_sources.ai_keywords')` — a short phrase needs only one
    match anywhere in the text. Word boundaries matter for short keywords
@@ -193,53 +193,54 @@ Two layers, in order:
    - **`HeuristicArticleAnalyzer`** (free, always succeeds): reuses
      `ArticleContentExtractor`'s parsed title/content and re-runs the same
      keyword filter from step 1 against the fuller text.
-   - **`GeminiArticleAnalyzer`**: one Gemini `generateContent` call per
+   - **`AiArticleAnalyzer`**: one structured-output call per
      candidate does both jobs at once — reads the article's plain text and
      returns structured JSON (`is_ai_related`, `title`, `content`) using
-     Gemini's `responseSchema`/`responseMimeType: application/json` mode, so
-     the reply is guaranteed-parseable rather than free text to coax into
-     shape. The `content` it returns is a short paraphrase, not verbatim
+     the configured provider's JSON mode, so the reply is machine-parseable
+     rather than free text to coax into shape. The `content` it returns is a short paraphrase, not verbatim
      scraped text — a secondary benefit beyond relevance judgment, since a
      paraphrased excerpt is more defensible to republish than a scraped
      block of the original site's text.
 
    `FallbackArticleAnalyzer` is what `NewsIngestionService` actually depends
-   on: it calls Gemini only when configured (`GEMINI_API_KEY` set **and**
-   `news_sources.gemini.enabled`), and falls back to `HeuristicArticleAnalyzer`
+   on: it calls the AI provider only when configured (`AI_API_KEY` set **and**
+   `news_sources.ai.enabled`), and falls back to `HeuristicArticleAnalyzer`
    on **any** failure — network error, rate limit (HTTP 429), quota
-   exhaustion, malformed/non-JSON response. A Gemini outage degrades
+   exhaustion, malformed/non-JSON response. A provider outage degrades
    relevance-filtering precision and title/content quality back to the free
    heuristic path; it never breaks ingestion. Mirrors the same
    never-let-one-component's-failure-break-the-pipeline principle used
    throughout the media pipeline.
 
-### Enabling Gemini
+### Enabling an AI provider
 
-Set `GEMINI_API_KEY` in `.env` (leave empty to keep using the free heuristic
-path — this is the default). `GEMINI_MODEL` defaults to
-`gemini-2.5-flash-lite`; check
-[ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models)
-for the current cheapest option, since Gemini's model lineup and pricing
-change often and this default is not guaranteed to still be current.
+Set `AI_PROVIDER=gemini` with `AI_API_KEY`, `AI_MODEL`, and `AI_BASE_URI` for
+Google's native Gemini API. To use OpenAI or another compatible hosted or
+self-hosted server, use `AI_PROVIDER=openai-compatible`, set its `AI_BASE_URI`
+and `AI_MODEL`, then select its supported JSON mode with
+`AI_OPENAI_STRUCTURED_OUTPUT` (`json_schema`, `json_object`, or `none`). A
+trusted local OpenAI-compatible server may leave `AI_API_KEY` empty; Gemini and
+hosted providers need their key. To keep the free heuristic path, set
+`AI_ANALYSIS_ENABLED=false` or do not configure a provider endpoint.
 
 ### Token/cost limits
 
-Per the "per-call cap, no cross-request budget tracking" choice — every
-Gemini call is bounded on both sides, but nothing tracks cumulative spend:
+Per the "per-call cap, no cross-request budget tracking" choice — every AI
+call is bounded on both sides, but nothing tracks cumulative spend:
 
 - **Input**: the article's plain text (`strip_tags`'d, whitespace-collapsed)
-  is truncated to `news_sources.gemini.max_input_chars` (default 12000 ≈
+  is truncated to `news_sources.ai.max_input_chars` (default 12000 ≈
   3000 tokens at ~4 chars/token) before being sent — a very long article
   costs the same as a short one.
-- **Output**: `generationConfig.maxOutputTokens` is set to
-  `news_sources.gemini.max_output_tokens` (default 500) on every request —
+- **Output**: the provider-specific output-token cap is set to
+  `news_sources.ai.max_output_tokens` (default 500) on every request —
   more than enough for a boolean and two short strings.
-- Every response's `usageMetadata` (prompt/output/total token counts) is
-  logged via `Log::info('[gemini-analysis] token usage', ...)` for manual
+- Every response's available prompt/output/total token counts are logged via
+  `Log::info('[ai-analysis] token usage', ...)` for manual
   cost monitoring — there is no automatic budget ceiling or spend tracking;
   if that becomes necessary, the natural next step is a running counter
   (similar to `MediaPipelineProgressTracker`'s cache-based counter) checked
-  in `FallbackArticleAnalyzer::geminiEnabled()` before ever calling Gemini.
+  in `FallbackArticleAnalyzer::aiEnabled()` before ever calling the provider.
 
 ## Freshness — only today's news
 
@@ -256,9 +257,9 @@ Enforced at two points, which answer different questions:
 
 1. **Ingestion** (`NewsIngestionService`) — don't create a `NewsItem` at all
    for an older article. RSS candidates carry a feed date, so most are
-   dropped before spending an HTTP fetch *and* a Gemini call; crawled
+   dropped before spending an HTTP fetch *and* an AI call; crawled
    candidates have no date until the page is parsed, so they're re-checked
-   after parsing but still before the Gemini call.
+   after parsing but still before the AI call.
 2. **Publishing** (`PublishNextReadyNewsItemJob::eligibleQuery`) — an
    article whose day has passed is abandoned rather than carried over, per
    *"if we did not manage to post it the same day, leave it unposted."*

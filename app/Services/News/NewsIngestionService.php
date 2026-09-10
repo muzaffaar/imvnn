@@ -36,7 +36,7 @@ class NewsIngestionService
             return null; // already have this article, from this source or another
         }
 
-        // Cheap prefilter before spending an HTTP fetch (or a Gemini call) —
+        // Cheap prefilter before spending an HTTP fetch (or an AI call) —
         // matters most for html_crawl candidates, where this is anchor text,
         // our only signal before visiting the page.
         if ($candidate->prefilterText() !== '' && ! $this->prefilter->isRelevant($candidate->prefilterText())) {
@@ -44,7 +44,7 @@ class NewsIngestionService
         }
 
         // RSS candidates carry a date from the feed, so most stale articles
-        // can be dropped here — before spending an HTTP fetch and a Gemini
+        // can be dropped here — before spending an HTTP fetch and an AI
         // call on something that could never be published anyway. Crawled
         // candidates have no date yet and are re-checked after parsing.
         if ($candidate->publishedAt !== null && ! $this->freshness->isFresh($candidate->publishedAt)) {
@@ -61,14 +61,14 @@ class NewsIngestionService
         }
 
         // Date extraction is cheap/deterministic and always worth running,
-        // regardless of which analyzer (Gemini or heuristic) ends up
+        // regardless of which analyzer (provider or heuristic) ends up
         // producing the title/content/relevance verdict below.
         $heuristicParse = $this->contentExtractor->extract($rawHtml);
         $publishedAt = $heuristicParse->publishedAt ?? $candidate->publishedAt;
 
         // Authoritative freshness gate: for crawled candidates this is the
         // first point a date exists at all, and it still runs before the
-        // Gemini call.
+        // AI call.
         if (! $this->freshness->isFresh($publishedAt)) {
             Log::info("[news-ingestion] skipped as not from today ({$candidate->url}), published_at=".($publishedAt?->toDateString() ?? 'unknown'));
 

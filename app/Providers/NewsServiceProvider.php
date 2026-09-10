@@ -2,13 +2,12 @@
 
 namespace App\Providers;
 
+use App\Services\News\AiArticleAnalyzer;
 use App\Services\News\ArticleAnalyzerInterface;
 use App\Services\News\FallbackArticleAnalyzer;
-use App\Services\News\GeminiArticleAnalyzer;
 use App\Services\News\HtmlCrawlSourceFetcher;
 use App\Services\News\NewsSourceFetcherManager;
 use App\Services\News\RssSourceFetcher;
-use GuzzleHttp\Client;
 use Illuminate\Support\ServiceProvider;
 
 class NewsServiceProvider extends ServiceProvider
@@ -24,10 +23,6 @@ class NewsServiceProvider extends ServiceProvider
 
         $this->app->bind(ArticleAnalyzerInterface::class, FallbackArticleAnalyzer::class);
 
-        $this->app->when(GeminiArticleAnalyzer::class)
-            ->needs(Client::class)
-            ->give(fn () => new Client([
-                'base_uri' => rtrim(config('services.gemini.api_base_uri'), '/').'/',
-            ]));
+        $this->app->bind(AiArticleAnalyzer::class);
     }
 }

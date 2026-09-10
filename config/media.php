@@ -163,15 +163,15 @@ return [
     | Telegram caption generation
     |--------------------------------------------------------------------------
     |
-    | Optional: GeminiCaptionComposer writes the actual post text — a short,
+    | Optional: AiCaptionComposer writes the actual post text — a short,
     | strictly Uzbek summary in whatever tone fits the story,
     | no links — instead of the free PlainCaptionComposer (title + excerpt,
     | original language, no translation). Disabled automatically if
-    | GEMINI_API_KEY is empty. Any Gemini failure falls back to
+    | AI_API_KEY is empty. Any provider failure falls back to
     | PlainCaptionComposer for that post rather than failing the job — see
     | FallbackCaptionComposer.
     |
-    | Cost bounded the same way as the news-analysis Gemini call (per-call
+    | Cost bounded the same way as the news-analysis AI call (per-call
     | only, no cross-request budget tracking) — see
     | docs/NEWS_FETCHING.md "Token/cost limits".
     */
@@ -180,7 +180,7 @@ return [
         // audience's local time, not the app's UTC storage timezone.
         'display_timezone' => env('TELEGRAM_DISPLAY_TIMEZONE', 'Asia/Tashkent'),
 
-        // Languages each post is written in, in order. Drives the Gemini
+        // Languages each post is written in, in order. Drives the AI-provider
         // response schema and the assembled caption, so adding or removing a
         // language is a config change rather than a code change. `flag` is
         // optional and only worth setting when there's more than one language
@@ -196,16 +196,16 @@ return [
         // One short witty line reacting to the story, under the summary.
         'humor_line' => env('TELEGRAM_CAPTION_HUMOR', true),
 
-        // When Gemini can't produce a caption, the only fallback is the
+        // When the AI provider can't produce a caption, the only fallback is the
         // article's own words — i.e. the source's language, usually English.
         // Off by default: for a channel that publishes in specific languages,
         // not posting beats posting untranslated. Turn on only if getting
         // something out matters more than the language it's in.
         'fallback_to_original_language' => env('TELEGRAM_CAPTION_FALLBACK_ORIGINAL', false),
 
-        'gemini_enabled' => env('GEMINI_CAPTION_ENABLED', true),
-        'max_output_tokens' => env('GEMINI_CAPTION_MAX_OUTPUT_TOKENS', 400),
-        'max_input_chars' => env('GEMINI_CAPTION_MAX_INPUT_CHARS', 4000),
-        'timeout_seconds' => env('GEMINI_CAPTION_TIMEOUT_SECONDS', 20),
+        'ai_enabled' => env('AI_CAPTION_ENABLED', env('GEMINI_CAPTION_ENABLED', true)),
+        'max_output_tokens' => env('AI_CAPTION_MAX_OUTPUT_TOKENS', env('GEMINI_CAPTION_MAX_OUTPUT_TOKENS', 400)),
+        'max_input_chars' => env('AI_CAPTION_MAX_INPUT_CHARS', env('GEMINI_CAPTION_MAX_INPUT_CHARS', 4000)),
+        'timeout_seconds' => env('AI_CAPTION_TIMEOUT_SECONDS', env('GEMINI_CAPTION_TIMEOUT_SECONDS', 20)),
     ],
 ];

@@ -84,7 +84,7 @@ return [
         // Some real feeds carry a large historical backlog (confirmed:
         // huggingface.co/blog/feed.xml has 860 items, research.google's has
         // 100) — capped per fetch so the first sync of a new source doesn't
-        // trigger hundreds of Gemini calls in one burst. Feeds list newest
+        // trigger hundreds of AI calls in one burst. Feeds list newest
         // first, so this deliberately means old backlog items already past
         // the cap at first sync are never retroactively processed — the goal
         // is to catch ongoing new content, not backfill a blog's full history.
@@ -116,16 +116,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Gemini article analysis
+    | AI article analysis
     |--------------------------------------------------------------------------
     |
-    | Optional: one Gemini call per candidate article both cleans up its
+    | Optional: one AI-provider call per candidate article both cleans up its
     | title/content AND judges AI-relevance, replacing the free heuristic
     | path (ArticleContentExtractor + keyword AiRelevanceFilter) — see
-    | GeminiArticleAnalyzer and docs/NEWS_FETCHING.md "Gemini analysis".
+    | AiArticleAnalyzer and docs/NEWS_FETCHING.md "AI analysis".
     |
-    | Disabled automatically if GEMINI_API_KEY is empty, regardless of
-    | `enabled` below. When enabled, any Gemini failure (network error,
+    | Disabled automatically if AI_API_KEY is empty, regardless of
+    | `enabled` below. When enabled, any provider failure (network error,
     | rate limit, quota, malformed response) falls back to the heuristic
     | path for that candidate rather than failing the job — see
     | FallbackArticleAnalyzer.
@@ -136,13 +136,13 @@ return [
     |     call — the response is just {is_ai_related, title, content}, so
     |     this can stay small.
     |   - `max_input_chars` truncates the plain-text article body sent to
-    |     Gemini (~4 chars/token, so 12000 chars is roughly 3000 input
+    |     the model (~4 chars/token, so 12000 chars is roughly 3000 input
     |     tokens) — bounds cost on the input side regardless of article length.
     */
-    'gemini' => [
-        'enabled' => env('GEMINI_ANALYSIS_ENABLED', true),
-        'max_output_tokens' => env('GEMINI_MAX_OUTPUT_TOKENS', 500),
-        'max_input_chars' => env('GEMINI_MAX_INPUT_CHARS', 12000),
-        'timeout_seconds' => env('GEMINI_TIMEOUT_SECONDS', 20),
+    'ai' => [
+        'enabled' => env('AI_ANALYSIS_ENABLED', env('GEMINI_ANALYSIS_ENABLED', true)),
+        'max_output_tokens' => env('AI_ANALYSIS_MAX_OUTPUT_TOKENS', env('GEMINI_MAX_OUTPUT_TOKENS', 500)),
+        'max_input_chars' => env('AI_ANALYSIS_MAX_INPUT_CHARS', env('GEMINI_MAX_INPUT_CHARS', 12000)),
+        'timeout_seconds' => env('AI_ANALYSIS_TIMEOUT_SECONDS', env('GEMINI_TIMEOUT_SECONDS', 20)),
     ],
 ];

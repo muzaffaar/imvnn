@@ -7,7 +7,7 @@ use App\Models\NewsItem;
 /**
  * The bits of a post that don't depend on which composer produced the body:
  * a bold source line, the article's publish time, and topical hashtags.
- * Shared so the Gemini and plain composers can't drift apart in look.
+ * Shared so the AI and plain composers can't drift apart in look.
  *
  * Telegram's HTML parse_mode supports only a small tag set (<b>, <i>, <a>,
  * <code>, <blockquote>, ...) — no headings, lists or rules — so structure

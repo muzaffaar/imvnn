@@ -7,7 +7,8 @@ use App\Models\NewsItem;
 use Illuminate\Support\Facades\Log;
 
 /**
- * What SelectMediaForPublishingJob actually depends on. Tries Gemini (for a
+ * What SelectMediaForPublishingJob actually depends on. Tries the configured
+ * AI provider (for a
  * target-language, emotionally-appropriate summary) only when configured, and
  * falls back to the free, single-language PlainCaptionComposer on any
  * failure — same never-break-the-pipeline principle as
@@ -16,17 +17,17 @@ use Illuminate\Support\Facades\Log;
 class FallbackCaptionComposer implements CaptionComposerInterface
 {
     public function __construct(
-        private readonly GeminiCaptionComposer $gemini,
+        private readonly AiCaptionComposer $ai,
         private readonly PlainCaptionComposer $plain,
     ) {}
 
     public function compose(NewsItem $newsItem, PostMediaPlan $plan): string
     {
-        if ($this->geminiEnabled()) {
+        if ($this->aiEnabled()) {
             try {
-                return $this->gemini->compose($newsItem, $plan);
+                return $this->ai->compose($newsItem, $plan);
             } catch (\Throwable $e) {
-                Log::warning("[telegram-caption] Gemini caption generation failed for news_item={$newsItem->id}: {$e->getMessage()}");
+                Log::warning("[telegram-caption] AI caption generation failed for news_item={$newsItem->id}: {$e->getMessage()}");
 
                 // PlainCaptionComposer can only echo the article's own words,
                 // which are in the source's language — usually English. When
@@ -45,8 +46,9 @@ class FallbackCaptionComposer implements CaptionComposerInterface
         return $this->plain->compose($newsItem, $plan);
     }
 
-    private function geminiEnabled(): bool
+    private function aiEnabled(): bool
     {
-        return (bool) config('media.telegram_caption.gemini_enabled') && filled(config('services.gemini.api_key'));
+        return (bool) config('media.telegram_caption.ai_enabled')
+            && (config('services.ai.provider') === 'openai-compatible' || filled(config('services.ai.api_key')));
     }
 }

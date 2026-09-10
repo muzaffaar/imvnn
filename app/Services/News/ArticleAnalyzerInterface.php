@@ -10,10 +10,11 @@ use App\DTOs\RawArticleCandidate;
  * Decides an article's final title/content and AI-relevance. Two
  * implementations: HeuristicArticleAnalyzer (free, deterministic — the
  * original ArticleContentExtractor + AiRelevanceFilter) and
- * GeminiArticleAnalyzer (one Gemini call does both). NewsIngestionService
- * depends on FallbackArticleAnalyzer, which tries Gemini (if configured)
+ * AiArticleAnalyzer (one structured-output provider call does both).
+ * NewsIngestionService
+ * depends on FallbackArticleAnalyzer, which tries the configured provider
  * and falls back to the heuristic on any failure — see
- * docs/NEWS_FETCHING.md "Gemini analysis".
+ * docs/NEWS_FETCHING.md "AI analysis".
  */
 interface ArticleAnalyzerInterface
 {

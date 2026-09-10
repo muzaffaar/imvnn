@@ -8,6 +8,6 @@ final class ArticleAnalysisResult
         public readonly bool $isAiRelated,
         public readonly ?string $title,
         public readonly ?string $content,
-        public readonly string $analyzedBy, // 'gemini' or 'heuristic' — kept for logging/debugging
+        public readonly string $analyzedBy, // provider name or 'heuristic' — kept for logging/debugging
     ) {}
 }

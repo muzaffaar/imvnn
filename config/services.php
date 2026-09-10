@@ -48,13 +48,32 @@ return [
         ],
     ],
 
-    'gemini' => [
-        'api_key' => env('GEMINI_API_KEY'),
-        // Check https://ai.google.dev/gemini-api/docs/models for the current
-        // cheapest model — pricing/lineup changes often, this default is not
-        // guaranteed to still be current or cheapest.
-        'model' => env('GEMINI_MODEL', 'gemini-2.5-flash-lite'),
-        'api_base_uri' => env('GEMINI_API_BASE_URI', 'https://generativelanguage.googleapis.com'),
+    /*
+    |--------------------------------------------------------------------------
+    | Text-generation provider
+    |--------------------------------------------------------------------------
+    |
+    | `gemini` uses Google's native generateContent API. `openai-compatible`
+    | uses the Chat Completions request shape supported by OpenAI and many
+    | hosted or self-hosted GPU servers (for example vLLM and LM Studio).
+    |
+    | The GEMINI_* fallbacks keep an existing deployment working until its
+    | environment variables are deliberately migrated to AI_* names.
+    */
+    'ai' => [
+        'provider' => env('AI_PROVIDER', 'gemini'),
+        'api_key' => env('AI_API_KEY', env('GEMINI_API_KEY')),
+        'model' => env('AI_MODEL', env('GEMINI_MODEL', 'gemini-2.5-flash-lite')),
+        'base_uri' => env('AI_BASE_URI', env('GEMINI_API_BASE_URI', 'https://generativelanguage.googleapis.com')),
+
+        'openai_compatible' => [
+            // Relative to AI_BASE_URI. Include v1/ here when the server needs it.
+            'path' => env('AI_OPENAI_PATH', 'chat/completions'),
+            // Use json_object or none for servers that do not implement json_schema.
+            'structured_output' => env('AI_OPENAI_STRUCTURED_OUTPUT', 'json_schema'),
+            // Older compatible servers commonly accept max_tokens only.
+            'max_tokens_field' => env('AI_OPENAI_MAX_TOKENS_FIELD', 'max_tokens'),
+        ],
     ],
 
 ];

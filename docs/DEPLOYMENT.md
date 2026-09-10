@@ -39,12 +39,42 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-Fill in `.env`: `DB_*`, `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`. Keep
+Fill in `.env`: `DB_*`, `TELEGRAM_BOT_TOKEN`, `AI_API_KEY`. Keep
 `QUEUE_CONNECTION=database` and set `DB_QUEUE_RETRY_AFTER=960` so the
 900-second video worker cannot be released and re-run while it is still
 processing. Configure `MEDIA_DISK=s3` with a public object URL when downloaded
 media may be published; Telegram fetches media by URL rather than from this
 server's local disk.
+
+### Choose the AI provider
+
+Gemini remains the default and uses its native API:
+
+```dotenv
+AI_PROVIDER=gemini
+AI_API_KEY=your-gemini-key
+AI_MODEL=gemini-2.5-flash-lite
+AI_BASE_URI=https://generativelanguage.googleapis.com
+```
+
+For OpenAI or a Chat-Completions-compatible service, including a local GPU
+server such as vLLM, use:
+
+```dotenv
+AI_PROVIDER=openai-compatible
+AI_API_KEY=                         # may be empty only for a trusted local server
+AI_MODEL=your-model-id
+AI_BASE_URI=http://127.0.0.1:8000/v1
+AI_OPENAI_PATH=chat/completions
+AI_OPENAI_STRUCTURED_OUTPUT=json_schema
+AI_OPENAI_MAX_TOKENS_FIELD=max_tokens
+```
+
+If that server does not support JSON Schema responses, set
+`AI_OPENAI_STRUCTURED_OUTPUT=json_object`; use `none` only as a last resort.
+The prompt still requests JSON and the application validates it. Existing
+deployments that only use `GEMINI_*` variables continue to work; migrate to
+`AI_*` when ready.
 
 Keep the server clock on **UTC**. Timestamps are stored in UTC and rendered
 per-channel via `media.telegram_caption.display_timezone`; changing the
@@ -171,9 +201,9 @@ again the same day.
   `NewsItem::whereNotNull('media_analysis_completed_at')->whereNull('telegram_published_at')->count()`
   — then the freshness window: on a quiet news day there may genuinely be
   no articles published today, which is working as intended, not a fault.
-- **Cost**: Gemini is called roughly twice per surviving article (analysis +
+- **Cost**: the configured AI provider is called roughly twice per surviving article (analysis +
   caption). Per-call input and output are both capped; there is no
   cumulative budget ceiling, so watch usage via the
-  `[gemini-analysis]`/`[gemini-caption]` token lines in the log.
+  `[ai-analysis]`/`[ai-caption]` token lines in the log.
 - **Failed jobs** land in `failed_jobs`; inspect with `php artisan
   queue:failed` and replay with `php artisan queue:retry all`.
