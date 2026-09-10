@@ -21,6 +21,8 @@ final class RawArticleCandidate
         public readonly ?array $rssItem = null,
         /** Trusted source-specific opt-out for the cheap keyword prefilter. */
         public readonly bool $skipPrefilter = false,
+        /** RSS summary may be used when a configured source blocks article GET requests. */
+        public readonly bool $useFeedContentWhenArticleUnavailable = false,
     ) {}
 
     /** Cheap text used for the pre-fetch AI relevance prefilter. */

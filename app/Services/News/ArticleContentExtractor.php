@@ -26,6 +26,7 @@ class ArticleContentExtractor
         }
 
         $xpath = new \DOMXPath($dom);
+        $jsonLdPublishedAt = $this->extractJsonLdPublishedAt($dom);
         $this->stripNonContentNodes($xpath);
 
         $title = $this->extractTitle($dom, $xpath);
@@ -33,7 +34,7 @@ class ArticleContentExtractor
         return new ParsedArticle(
             title: $title,
             content: $this->extractContent($xpath),
-            publishedAt: $this->extractPublishedAt($xpath, $title),
+            publishedAt: $this->extractPublishedAt($xpath, $title, $jsonLdPublishedAt),
         );
     }
 
@@ -75,7 +76,7 @@ class ArticleContentExtractor
         return $h1 ? trim($h1) : null;
     }
 
-    private function extractPublishedAt(\DOMXPath $xpath, ?string $title = null): ?CarbonImmutable
+    private function extractPublishedAt(\DOMXPath $xpath, ?string $title = null, ?CarbonImmutable $jsonLdPublishedAt = null): ?CarbonImmutable
     {
         $metaNames = ['article:published_time', 'og:article:published_time', 'publish-date', 'publishdate', 'date'];
 
@@ -91,7 +92,56 @@ class ArticleContentExtractor
             return $parsed;
         }
 
+        if ($jsonLdPublishedAt) {
+            return $jsonLdPublishedAt;
+        }
+
         return $this->extractDateFromVisibleText($xpath, $title);
+    }
+
+    /**
+     * Modern publishers frequently expose their Article/NewsArticle date in
+     * JSON-LD even when they omit an HTML meta tag and <time> element.
+     */
+    private function extractJsonLdPublishedAt(\DOMDocument $dom): ?CarbonImmutable
+    {
+        foreach ($dom->getElementsByTagName('script') as $script) {
+            if (strtolower($script->getAttribute('type')) !== 'application/ld+json') {
+                continue;
+            }
+
+            $data = json_decode($script->textContent, true);
+            foreach ($this->jsonLdNodes(is_array($data) ? $data : []) as $node) {
+                $date = $node['datePublished'] ?? $node['dateCreated'] ?? null;
+                if (is_string($date) && ($parsed = $this->tryParseDate($date))) {
+                    return $parsed;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** @return iterable<array<string, mixed>> */
+    private function jsonLdNodes(array $data): iterable
+    {
+        if (array_is_list($data)) {
+            foreach ($data as $item) {
+                if (is_array($item)) {
+                    yield from $this->jsonLdNodes($item);
+                }
+            }
+
+            return;
+        }
+
+        yield $data;
+
+        foreach ($data['@graph'] ?? [] as $item) {
+            if (is_array($item)) {
+                yield from $this->jsonLdNodes($item);
+            }
+        }
     }
 
     /**

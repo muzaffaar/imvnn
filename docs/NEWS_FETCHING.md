@@ -55,6 +55,8 @@ lists mix the two:
   into the exact shape `RssMediaExtractor` already expects (see
   `RawArticleCandidate::$rssItem`) — an RSS-sourced article gets full media
   extraction without the media pipeline needing to know it came from a feed.
+  The normalized RSS media data is persisted with the `NewsItem`, so it
+  survives the discovery-to-media queue boundary.
   Title, summary/`content:encoded`, and publish date come straight from the
   feed; the full article page is still fetched afterward (see below) so the
   HTML-based extractors (`HtmlMetadataExtractor`, `HtmlContentExtractor`) have
@@ -147,6 +149,9 @@ patterns are case-sensitive Laravel-style globs against the complete URL.
 Relative links are resolved according to RFC URL rules, so links such as
 `post-name`, `../post-name`, and `?page=2` now work. The configured source
 host remains allowed by default; `allowed_hosts` only adds exact hosts.
+`skip_prefilter` works for RSS as well as HTML sources, but reserve it for a
+source that is already tightly focused on AI; it increases article-fetch and
+optional model-analysis volume.
 
 ### Real sites this was tuned against
 
@@ -186,7 +191,8 @@ media pipeline's other "cheap heuristic, not a research project" choices:
 
 1. Title: `og:title` → `<title>` → first `<h1>`.
 2. Publish date: common `<meta>` names
-   (`article:published_time`, `publish-date`, ...) → `<time datetime>`.
+   (`article:published_time`, `publish-date`, ...) → `<time datetime>` →
+   Schema.org JSON-LD `datePublished` / `dateCreated` → visible-date fallback.
 3. Body: all `<p>` text inside `<article>` if present; otherwise the
    `<div>`/`<section>`/`<main>` with the highest *paragraph-text density*
    (text length per descendant element, not raw text length — picking by raw

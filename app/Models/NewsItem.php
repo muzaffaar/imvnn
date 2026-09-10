@@ -12,7 +12,7 @@ class NewsItem extends Model
     use HasUuidPrimaryKey;
 
     protected $fillable = [
-        'source_id', 'event_id', 'title', 'url', 'canonical_url', 'raw_html', 'content', 'published_at',
+        'source_id', 'event_id', 'title', 'url', 'canonical_url', 'raw_html', 'source_payload', 'content', 'published_at',
         'media_analysis_completed_at', 'publish_queued_at', 'telegram_published_at',
     ];
 
@@ -20,6 +20,7 @@ class NewsItem extends Model
     {
         return [
             'published_at' => 'datetime',
+            'source_payload' => 'array',
             'media_analysis_completed_at' => 'datetime',
             'publish_queued_at' => 'datetime',
             'telegram_published_at' => 'datetime',

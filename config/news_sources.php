@@ -27,6 +27,8 @@ return [
     | - max_links (1-100): candidate cap for this source
     | - skip_prefilter: only for trusted AI-only sources whose anchor text
     |   does not reliably contain an AI keyword
+    | - use_feed_content_when_article_unavailable: RSS only; use a feed's
+    |   dated summary when a verified source blocks its article page
     |
     | Run `php artisan news-sources:sync` after editing this file to write
     | these into the `sources` table (upserted by `slug`, so editing an
@@ -48,6 +50,41 @@ return [
         ['name' => 'MIT News — All', 'slug' => 'mit-news-all', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/rss/feed', 'reliability_score' => 90, 'media_reuse_permitted' => false],
         ['name' => 'Google Research Blog', 'slug' => 'google-research-blog', 'fetch_type' => 'rss', 'url' => 'https://research.google/blog/rss/', 'reliability_score' => 90, 'media_reuse_permitted' => false],
         ['name' => 'MIT Technology Review — AI', 'slug' => 'mit-technology-review-ai', 'fetch_type' => 'rss', 'url' => 'https://www.technologyreview.com/topic/artificial-intelligence/feed/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
+        // Official primary sources, verified September 2026. Prefer feeds
+        // whenever available: they are cheaper, carry dates, and avoid brittle
+        // browser-like crawling of each vendor's listing page.
+        ['name' => 'Google DeepMind News', 'slug' => 'google-deepmind-news', 'fetch_type' => 'rss', 'url' => 'https://deepmind.google/blog/rss.xml', 'reliability_score' => 95, 'media_reuse_permitted' => false,
+            // Headlines such as "AlphaGenome Atlas" need article-page analysis
+            // even when the short RSS entry does not literally say "AI".
+            'fetch_options' => ['skip_prefilter' => true],
+        ],
+        ['name' => 'AWS Machine Learning Blog', 'slug' => 'aws-machine-learning-blog', 'fetch_type' => 'rss', 'url' => 'https://aws.amazon.com/blogs/machine-learning/feed/', 'reliability_score' => 85, 'media_reuse_permitted' => false,
+            'fetch_options' => ['skip_prefilter' => true],
+        ],
+        ['name' => 'NVIDIA AI Blog', 'slug' => 'nvidia-ai-blog', 'fetch_type' => 'rss', 'url' => 'https://blogs.nvidia.com/blog/tag/artificial-intelligence/feed/', 'reliability_score' => 85, 'media_reuse_permitted' => false,
+            'fetch_options' => ['skip_prefilter' => true],
+        ],
+        ['name' => 'Meta AI Blog', 'slug' => 'meta-ai-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://ai.meta.com/blog/', 'reliability_score' => 90, 'media_reuse_permitted' => false,
+            'fetch_options' => [
+                'article_link_xpath' => '//main//a[contains(@href, "/blog/")]',
+                'include_url_patterns' => ['https://ai.meta.com/blog/*'],
+                'skip_prefilter' => true,
+            ],
+        ],
+        ['name' => 'Cohere Blog', 'slug' => 'cohere-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://cohere.com/blog/', 'reliability_score' => 85, 'media_reuse_permitted' => false,
+            'fetch_options' => [
+                'article_link_xpath' => '//main//a[contains(@href, "/blog/")]',
+                'include_url_patterns' => ['https://cohere.com/blog/*'],
+                'skip_prefilter' => true,
+            ],
+        ],
+        ['name' => 'Stability AI News', 'slug' => 'stability-ai-news', 'fetch_type' => 'html_crawl', 'url' => 'https://stability.ai/news-updates', 'reliability_score' => 80, 'media_reuse_permitted' => false,
+            'fetch_options' => [
+                'article_link_xpath' => '//main//a[contains(@href, "/news-updates/")]',
+                'include_url_patterns' => ['https://stability.ai/news-updates/*'],
+                'skip_prefilter' => true,
+            ],
+        ],
         // ['name' => 'Example Labs Blog', 'slug' => 'example-labs-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://example.com/blog/', 'reliability_score' => 90, 'media_reuse_permitted' => true,
         //     'fetch_options' => [
         //         'article_link_xpath' => '//main//article//a[@href]',

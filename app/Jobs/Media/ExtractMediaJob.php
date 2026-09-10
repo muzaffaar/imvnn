@@ -22,6 +22,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -58,6 +59,7 @@ class ExtractMediaJob implements ShouldQueue
             baseUrl: $newsItem->canonical_url ?: $newsItem->url,
             title: $newsItem->title,
             html: $newsItem->raw_html,
+            rssItem: data_get($newsItem->source_payload, 'rss_item'),
         );
 
         $candidates = $extractionManager->extract($context);
@@ -124,7 +126,7 @@ class ExtractMediaJob implements ShouldQueue
 
         $newsItem->mediaAssets()->syncWithoutDetaching([
             $asset->id => [
-                'id' => (string) \Illuminate\Support\Str::uuid(),
+                'id' => (string) Str::uuid(),
                 'role' => $extracted->isFeaturedHint ? 'featured' : 'body',
                 'is_featured' => $extracted->isFeaturedHint,
                 'position' => $extracted->position,

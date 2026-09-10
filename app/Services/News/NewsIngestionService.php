@@ -55,11 +55,22 @@ class NewsIngestionService
         }
 
         $rawHtml = $candidate->rawHtml;
+        $articleHtml = $rawHtml;
 
         if ($rawHtml === null) {
             $rawHtml = $this->fetchArticleHtml($candidate->url);
             if ($rawHtml === null) {
-                return null;
+                if (! $candidate->useFeedContentWhenArticleUnavailable || blank($candidate->summary)) {
+                    return null;
+                }
+
+                // A trusted feed may expose a valid, dated summary while its
+                // article pages block non-browser HTTP clients. Analyze the
+                // summary, but do not pretend this synthetic HTML was fetched
+                // from the publisher.
+                $rawHtml = $this->feedFallbackHtml($candidate);
+            } else {
+                $articleHtml = $rawHtml;
             }
         }
 
@@ -94,7 +105,8 @@ class NewsIngestionService
                 'title' => $analysis->title,
                 'url' => $candidate->url,
                 'canonical_url' => $canonicalUrl,
-                'raw_html' => $rawHtml,
+                'raw_html' => $articleHtml,
+                'source_payload' => $candidate->rssItem === null ? null : ['rss_item' => $candidate->rssItem],
                 'content' => $analysis->content,
                 'published_at' => $publishedAt,
             ]);
@@ -124,5 +136,13 @@ class NewsIngestionService
 
             return null;
         }
+    }
+
+    private function feedFallbackHtml(RawArticleCandidate $candidate): string
+    {
+        $title = e($candidate->title ?? '');
+        $summary = e($candidate->summary ?? '');
+
+        return "<article><h1>{$title}</h1><p>{$summary}</p></article>";
     }
 }

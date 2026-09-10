@@ -2,10 +2,19 @@
 
 namespace Tests\Feature;
 
+use App\DTOs\ArticleAnalysisResult;
+use App\DTOs\RawArticleCandidate;
 use App\Models\Source;
 use App\Services\Http\BoundedHttpFetcher;
+use App\Services\Media\Deduplication\UrlNormalizer;
+use App\Services\News\AiRelevanceFilter;
+use App\Services\News\ArticleAnalyzerInterface;
+use App\Services\News\ArticleContentExtractor;
+use App\Services\News\FreshnessPolicy;
 use App\Services\News\HtmlCrawlSourceFetcher;
+use App\Services\News\NewsIngestionService;
 use App\Services\News\RssSourceFetcher;
+use Carbon\CarbonImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
@@ -62,6 +71,7 @@ class SourceFetchersTest extends TestCase
             'slug' => 'example-feed',
             'fetch_type' => 'rss',
             'source_url' => 'https://example.test/feed.xml',
+            'fetch_options' => ['skip_prefilter' => true],
             'is_active' => true,
         ]);
 
@@ -85,6 +95,7 @@ class SourceFetchersTest extends TestCase
 
         $this->assertCount(1, $candidates);
         $this->assertCount(2, $candidates->first()->rssItem['enclosures']);
+        $this->assertTrue($candidates->first()->skipPrefilter);
         $source->refresh();
         $this->assertSame('"feed-v1"', $source->feed_etag);
         $this->assertSame('Wed, 10 Sep 2026 12:00:00 GMT', $source->feed_last_modified);
@@ -98,6 +109,44 @@ class SourceFetchersTest extends TestCase
         $request = $notModifiedHistory[0]['request'];
         $this->assertSame('"feed-v1"', $request->getHeaderLine('If-None-Match'));
         $this->assertSame('Wed, 10 Sep 2026 12:00:00 GMT', $request->getHeaderLine('If-Modified-Since'));
+    }
+
+    public function test_verified_feed_can_preserve_its_summary_when_article_fetch_is_blocked(): void
+    {
+        $source = Source::create([
+            'name' => 'Blocked Article Feed',
+            'slug' => 'blocked-article-feed',
+            'fetch_type' => 'rss',
+            'source_url' => 'https://example.test/feed.xml',
+            'is_active' => true,
+        ]);
+        $analyzer = $this->mock(ArticleAnalyzerInterface::class);
+        $analyzer->shouldReceive('analyze')
+            ->once()
+            ->andReturn(new ArticleAnalysisResult(true, 'OpenAI model update', 'Feed-provided article summary.', 'heuristic'));
+
+        $service = new NewsIngestionService(
+            $this->boundedFetcher([new Response(403)]),
+            new ArticleContentExtractor,
+            $analyzer,
+            new AiRelevanceFilter,
+            new UrlNormalizer,
+            new FreshnessPolicy,
+        );
+
+        $newsItem = $service->ingest($source, new RawArticleCandidate(
+            url: 'https://example.test/news/model-update',
+            title: 'OpenAI model update',
+            summary: 'A sufficiently detailed summary supplied by a trusted feed.',
+            publishedAt: CarbonImmutable::now(),
+            rssItem: ['enclosures' => [['url' => 'https://cdn.example.test/cover.jpg', 'type' => 'image/jpeg']]],
+            skipPrefilter: true,
+            useFeedContentWhenArticleUnavailable: true,
+        ));
+
+        $this->assertNotNull($newsItem);
+        $this->assertNull($newsItem->raw_html);
+        $this->assertSame('https://cdn.example.test/cover.jpg', data_get($newsItem->source_payload, 'rss_item.enclosures.0.url'));
     }
 
     /** @param list<Response> $responses @param array<int, array<string, mixed>> $history */

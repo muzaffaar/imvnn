@@ -24,4 +24,16 @@ class ArticleExtractionTest extends TestCase
         $article = (new ArticleContentExtractor)->extract('<article><p>'.$body.'</p><aside><p>'.$garbage.'</p></aside></article>');
         $this->assertSame($body, $article->content);
     }
+
+    public function test_json_ld_publish_date_is_used_when_meta_and_time_are_absent(): void
+    {
+        $article = (new ArticleContentExtractor)->extract(<<<'HTML'
+            <script type="application/ld+json">
+                {"@context":"https://schema.org","@type":"NewsArticle","datePublished":"2026-09-10T12:00:00Z"}
+            </script>
+            <article><h1>AI update</h1><p>This sufficiently long paragraph describes an artificial intelligence update in detail.</p></article>
+            HTML);
+
+        $this->assertSame('2026-09-10 12:00:00', $article->publishedAt?->utc()->format('Y-m-d H:i:s'));
+    }
 }

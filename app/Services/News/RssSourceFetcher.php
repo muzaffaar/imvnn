@@ -28,6 +28,7 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
     public function fetch(Source $source): Collection
     {
         $limits = config('news_sources.limits');
+        $options = is_array($source->fetch_options) ? $source->fetch_options : [];
 
         $download = $this->fetcher->downloadToMemoryConditionally(
             $source->source_url,
@@ -67,7 +68,9 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
         // against a real 10-item feed that this returns 1.
         if ($items !== null) {
             foreach ($items as $item) {
-                $results->push($isAtom ? $this->fromAtomEntry($item, $namespaces) : $this->fromRssItem($item, $namespaces));
+                $results->push($isAtom
+                    ? $this->fromAtomEntry($item, $namespaces, $options)
+                    : $this->fromRssItem($item, $namespaces, $options));
             }
         }
 
@@ -85,7 +88,8 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
         return $parsed ?: null;
     }
 
-    private function fromRssItem(SimpleXMLElement $item, array $namespaces): ?RawArticleCandidate
+    /** @param array<string, mixed> $options */
+    private function fromRssItem(SimpleXMLElement $item, array $namespaces, array $options): ?RawArticleCandidate
     {
         $url = trim((string) $item->link) ?: trim((string) $item->guid);
         if ($url === '' || ! str_starts_with($url, 'http')) {
@@ -105,10 +109,13 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
                 'media_thumbnails' => $this->extractMediaThumbnails($media),
                 'enclosures' => $this->extractEnclosure($item),
             ],
+            skipPrefilter: (bool) ($options['skip_prefilter'] ?? false),
+            useFeedContentWhenArticleUnavailable: (bool) ($options['use_feed_content_when_article_unavailable'] ?? false),
         );
     }
 
-    private function fromAtomEntry(SimpleXMLElement $entry, array $namespaces): ?RawArticleCandidate
+    /** @param array<string, mixed> $options */
+    private function fromAtomEntry(SimpleXMLElement $entry, array $namespaces, array $options): ?RawArticleCandidate
     {
         $url = null;
         foreach ($entry->link as $link) {
@@ -136,6 +143,8 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
                 'media_thumbnails' => $this->extractMediaThumbnails($media),
                 'enclosures' => [],
             ],
+            skipPrefilter: (bool) ($options['skip_prefilter'] ?? false),
+            useFeedContentWhenArticleUnavailable: (bool) ($options['use_feed_content_when_article_unavailable'] ?? false),
         );
     }
 
