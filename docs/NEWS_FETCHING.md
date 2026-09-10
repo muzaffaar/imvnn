@@ -241,6 +241,59 @@ Gemini call is bounded on both sides, but nothing tracks cumulative spend:
   (similar to `MediaPipelineProgressTracker`'s cache-based counter) checked
   in `FallbackArticleAnalyzer::geminiEnabled()` before ever calling Gemini.
 
+## Freshness — only today's news
+
+`FreshnessPolicy`, gated on `news_sources.freshness.only_today` (default on).
+An article is publishable only on the calendar day it was published, in the
+**audience's** timezone (`news_sources.freshness.timezone`, default
+`Asia/Tashkent`) — not UTC and not the publisher's.
+
+This exists because feeds carry far more history than their item count
+suggests: the newest 20 items of a low-volume company blog can reach back a
+quarter, which is how an article from May was posted in September.
+
+Enforced at two points, which answer different questions:
+
+1. **Ingestion** (`NewsIngestionService`) — don't create a `NewsItem` at all
+   for an older article. RSS candidates carry a feed date, so most are
+   dropped before spending an HTTP fetch *and* a Gemini call; crawled
+   candidates have no date until the page is parsed, so they're re-checked
+   after parsing but still before the Gemini call.
+2. **Publishing** (`PublishNextReadyNewsItemJob::eligibleQuery`) — an
+   article whose day has passed is abandoned rather than carried over, per
+   *"if we did not manage to post it the same day, leave it unposted."*
+   This also keeps the backlog count honest, since that count drives the
+   posting cadence.
+
+**An article with no determinable date is not fresh.** That's a deliberate
+bias toward silence: an unknown date is far more often an old article than a
+new one, and posting a stale item is the whole failure this policy exists to
+prevent.
+
+That decision put real weight on date extraction, and one source had *zero*
+dated articles: anthropic.com publishes no date meta tag, no `<time>`
+element and no JSON-LD — just plain text after the headline. Two things had
+to be fixed in `ArticleContentExtractor` before it could be read:
+
+- **`<script>` is stripped before any text scan.** Next.js embeds the whole
+  page again as a serialized JSON hydration payload, in which the article's
+  own title reappears around character 139,000 — the title-proximity search
+  was landing there and scanning JSON instead of prose.
+- **The date patterns carry no `\b` anchor before the month.** `textContent`
+  concatenates adjacent elements without whitespace, so the date arrives
+  glued to the headline (`...watermark worksAug 14, 2026Future Claude
+  models`), and a word boundary can never match `worksAug`.
+
+### A timezone trap worth knowing
+
+`FreshnessPolicy::windowStart()` returns **UTC** deliberately. Eloquent binds
+a `DateTimeInterface` to SQL by formatting it as-is, *without* converting the
+timezone — so returning a `+05:00` boundary compares `2026-09-10 00:00`
+against UTC-stored timestamps and silently discards everything published
+between 19:00 and 24:00 UTC: the first five hours of every Tashkent day.
+Carbon-to-Carbon comparison in `isFresh()` is unaffected (it compares
+instants), which is exactly what makes the SQL side easy to get wrong.
+
 ## Deduplication
 
 `news_items.canonical_url` has a unique DB constraint; `NewsIngestionService`

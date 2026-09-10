@@ -366,11 +366,23 @@ no deploy) via `computeDelaySeconds()`:
 
 A post is assembled from a bold source line, the article's publish time in
 the channel's timezone (`media.telegram_caption.display_timezone`, default
-`Asia/Tashkent`), a bold headline plus 2-3 sentence summary in **both Uzbek
-and Russian**, and 2-4 topical hashtags — no links of any kind, since the
-post is meant to stand on its own rather than tease a click. `PostHeader`
-renders the shared source/time/hashtag pieces so the Gemini and plain
-composers can't drift apart in appearance.
+`Asia/Tashkent`), a bold headline plus 2-3 sentence summary per language,
+and 2-4 topical hashtags — no links of any kind, since the post is meant to
+stand on its own rather than tease a click. `PostHeader` renders the shared
+source/time/hashtag pieces so the Gemini and plain composers can't drift
+apart in appearance.
+
+Languages come from `media.telegram_caption.languages` (currently Russian
+only) rather than being hardcoded: that list drives the Gemini response
+schema, the prompt, and the assembled sections together, so adding or
+removing a language can't leave the three out of step. Each extra language
+competes for the same 1024-character caption budget.
+
+When Gemini can't produce a caption, the only fallback is the article's own
+words — i.e. the source's language, usually English. For a channel that
+publishes in specific languages that's worse than staying quiet, so
+`fallback_to_original_language` is **off** by default: the publish attempt
+fails and retries instead of going out untranslated.
 
 `CaptionBudget` enforces Telegram's length limits, which differ sharply by
 post type: **1024 characters for a photo/video/media-group caption** versus
