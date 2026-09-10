@@ -25,7 +25,8 @@ return [
     | see docs/MEDIA_ARCHITECTURE.md.
     */
     'sources' => [
-        // ['name' => 'Example AI Desk', 'slug' => 'example-ai-desk', 'fetch_type' => 'rss', 'url' => 'https://example.com/category/ai/feed', 'reliability_score' => 75, 'media_reuse_permitted' => false],
+        ['name' => 'MIT News — Robotics', 'slug' => 'mit-news-robotics', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/topic/mitrobotics-rss.xml', 'reliability_score' => 90, 'media_reuse_permitted' => false],
+        ['name' => 'Google Blog', 'slug' => 'google-blog', 'fetch_type' => 'rss', 'url' => 'https://blog.google/rss/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
         // ['name' => 'Example Labs Blog', 'slug' => 'example-labs-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://example.com/blog', 'reliability_score' => 90, 'media_reuse_permitted' => true],
     ],
 
@@ -74,4 +75,36 @@ return [
 
     // How often the scheduler polls every active source (see routes/console.php).
     'fetch_interval_minutes' => 30,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Gemini article analysis
+    |--------------------------------------------------------------------------
+    |
+    | Optional: one Gemini call per candidate article both cleans up its
+    | title/content AND judges AI-relevance, replacing the free heuristic
+    | path (ArticleContentExtractor + keyword AiRelevanceFilter) — see
+    | GeminiArticleAnalyzer and docs/NEWS_FETCHING.md "Gemini analysis".
+    |
+    | Disabled automatically if GEMINI_API_KEY is empty, regardless of
+    | `enabled` below. When enabled, any Gemini failure (network error,
+    | rate limit, quota, malformed response) falls back to the heuristic
+    | path for that candidate rather than failing the job — see
+    | FallbackArticleAnalyzer.
+    |
+    | Cost control, both per the "per-call output cap + input truncation"
+    | approach (no cross-request budget tracking):
+    |   - `max_output_tokens` caps generationConfig.maxOutputTokens on every
+    |     call — the response is just {is_ai_related, title, content}, so
+    |     this can stay small.
+    |   - `max_input_chars` truncates the plain-text article body sent to
+    |     Gemini (~4 chars/token, so 12000 chars is roughly 3000 input
+    |     tokens) — bounds cost on the input side regardless of article length.
+    */
+    'gemini' => [
+        'enabled' => env('GEMINI_ANALYSIS_ENABLED', true),
+        'max_output_tokens' => env('GEMINI_MAX_OUTPUT_TOKENS', 500),
+        'max_input_chars' => env('GEMINI_MAX_INPUT_CHARS', 12000),
+        'timeout_seconds' => env('GEMINI_TIMEOUT_SECONDS', 20),
+    ],
 ];

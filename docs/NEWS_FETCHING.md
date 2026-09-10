@@ -94,36 +94,75 @@ acceptable since this excerpt only ever becomes a Telegram caption
 (`Str::limit`'d to 500 chars) and a `MediaRelevanceScorer` keyword-overlap
 input, not a republished full article body.
 
-## AI relevance filtering (`AiRelevanceFilter`)
+## AI relevance filtering and analysis
 
-Applied **twice** per candidate, per the medium-effort tradeoff chosen for
-this project (keyword filter, not an LLM classifier — see below for when to
-reconsider that):
+Two layers, in order:
 
-1. **Prefilter**, before any HTTP fetch of the article page: title + summary
-   for RSS candidates, or just the anchor text for `html_crawl` candidates
-   (the only signal available before visiting the page). Matters most for
-   crawled sources, where it avoids spending a fetch on every discovered
-   link.
-2. **Authoritative filter**, after parsing: the real title + parsed content.
-   This is what actually gates `NewsItem` creation.
+1. **Prefilter** (`AiRelevanceFilter`, always runs, free), before any HTTP
+   fetch of the article page: title + summary for RSS candidates, or just
+   the anchor text for `html_crawl` candidates (the only signal available
+   before visiting the page). Matters most for crawled sources, where it
+   avoids spending a fetch — or a Gemini call — on every discovered link.
+   Matching is case-insensitive, word-boundary (`\b...\b`) regex against
+   `config('news_sources.ai_keywords')` — a short phrase needs only one
+   match anywhere in the text. Word boundaries matter for short keywords
+   like `ai`: `\bai\b` matches "new **AI** tool" but not "s**ai**d" or
+   "m**ai**ntain", since a word boundary requires an actual transition
+   between a word and a non-word character.
+2. **Authoritative analysis** (`ArticleAnalyzerInterface`, after the article
+   page is fetched): decides the final title, content, and AI-relevance
+   verdict that actually gates `NewsItem` creation. Two implementations:
 
-Matching is case-insensitive, word-boundary (`\b...\b`) regex against
-`config('news_sources.ai_keywords')` — a short phrase needs only one match
-anywhere in the text. Word boundaries matter for short keywords like `ai`:
-`\bai\b` matches "new **AI** tool" but not "s**ai**d" or "m**ai**ntain",
-since a word boundary requires an actual transition between a word and a
-non-word character.
+   - **`HeuristicArticleAnalyzer`** (free, always succeeds): reuses
+     `ArticleContentExtractor`'s parsed title/content and re-runs the same
+     keyword filter from step 1 against the fuller text.
+   - **`GeminiArticleAnalyzer`**: one Gemini `generateContent` call per
+     candidate does both jobs at once — reads the article's plain text and
+     returns structured JSON (`is_ai_related`, `title`, `content`) using
+     Gemini's `responseSchema`/`responseMimeType: application/json` mode, so
+     the reply is guaranteed-parseable rather than free text to coax into
+     shape. The `content` it returns is a short paraphrase, not verbatim
+     scraped text — a secondary benefit beyond relevance judgment, since a
+     paraphrased excerpt is more defensible to republish than a scraped
+     block of the original site's text.
 
-**When to move beyond a keyword filter:** if you start seeing systematic
-false positives (e.g. "AI" as a person's initials, a company ticker) or
-false negatives (an article that's clearly AI-related but never uses any of
-the listed terms — jargon drift, a new model/company name not yet in the
-list), the next step is the same tiered pattern used for media relevance in
-`RelevanceAnalysisService`: keep the keyword filter as a free first pass to
-avoid paying for every candidate, then send only the survivors (or, for the
-prefilter stage, only candidates the keyword filter is *unsure* about) to an
-LLM classifier for a real judgment call.
+   `FallbackArticleAnalyzer` is what `NewsIngestionService` actually depends
+   on: it calls Gemini only when configured (`GEMINI_API_KEY` set **and**
+   `news_sources.gemini.enabled`), and falls back to `HeuristicArticleAnalyzer`
+   on **any** failure — network error, rate limit (HTTP 429), quota
+   exhaustion, malformed/non-JSON response. A Gemini outage degrades
+   relevance-filtering precision and title/content quality back to the free
+   heuristic path; it never breaks ingestion. Mirrors the same
+   never-let-one-component's-failure-break-the-pipeline principle used
+   throughout the media pipeline.
+
+### Enabling Gemini
+
+Set `GEMINI_API_KEY` in `.env` (leave empty to keep using the free heuristic
+path — this is the default). `GEMINI_MODEL` defaults to
+`gemini-2.5-flash-lite`; check
+[ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models)
+for the current cheapest option, since Gemini's model lineup and pricing
+change often and this default is not guaranteed to still be current.
+
+### Token/cost limits
+
+Per the "per-call cap, no cross-request budget tracking" choice — every
+Gemini call is bounded on both sides, but nothing tracks cumulative spend:
+
+- **Input**: the article's plain text (`strip_tags`'d, whitespace-collapsed)
+  is truncated to `news_sources.gemini.max_input_chars` (default 12000 ≈
+  3000 tokens at ~4 chars/token) before being sent — a very long article
+  costs the same as a short one.
+- **Output**: `generationConfig.maxOutputTokens` is set to
+  `news_sources.gemini.max_output_tokens` (default 500) on every request —
+  more than enough for a boolean and two short strings.
+- Every response's `usageMetadata` (prompt/output/total token counts) is
+  logged via `Log::info('[gemini-analysis] token usage', ...)` for manual
+  cost monitoring — there is no automatic budget ceiling or spend tracking;
+  if that becomes necessary, the natural next step is a running counter
+  (similar to `MediaPipelineProgressTracker`'s cache-based counter) checked
+  in `FallbackArticleAnalyzer::geminiEnabled()` before ever calling Gemini.
 
 ## Deduplication
 

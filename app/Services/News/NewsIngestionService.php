@@ -21,7 +21,8 @@ class NewsIngestionService
     public function __construct(
         private readonly BoundedHttpFetcher $fetcher,
         private readonly ArticleContentExtractor $contentExtractor,
-        private readonly AiRelevanceFilter $aiFilter,
+        private readonly ArticleAnalyzerInterface $articleAnalyzer,
+        private readonly AiRelevanceFilter $prefilter,
         private readonly UrlNormalizer $urlNormalizer,
     ) {}
 
@@ -34,48 +35,46 @@ class NewsIngestionService
             return null; // already have this article, from this source or another
         }
 
-        // Cheap prefilter before spending an HTTP fetch — matters most for
-        // html_crawl candidates, where this is anchor text, our only signal
-        // before visiting the page.
-        if ($candidate->prefilterText() !== '' && ! $this->aiFilter->isRelevant($candidate->prefilterText())) {
+        // Cheap prefilter before spending an HTTP fetch (or a Gemini call) —
+        // matters most for html_crawl candidates, where this is anchor text,
+        // our only signal before visiting the page.
+        if ($candidate->prefilterText() !== '' && ! $this->prefilter->isRelevant($candidate->prefilterText())) {
             return null;
         }
 
         $rawHtml = $candidate->rawHtml;
-        $title = $candidate->title;
-        $content = $candidate->summary;
-        $publishedAt = $candidate->publishedAt;
 
         if ($rawHtml === null) {
             $rawHtml = $this->fetchArticleHtml($candidate->url);
             if ($rawHtml === null) {
                 return null;
             }
-
-            $parsed = $this->contentExtractor->extract($rawHtml);
-            $title = $parsed->title ?? $title;
-            $content = $parsed->content ?? $content;
-            $publishedAt = $parsed->publishedAt ?? $publishedAt;
         }
 
-        if (! $title) {
+        // Date extraction is cheap/deterministic and always worth running,
+        // regardless of which analyzer (Gemini or heuristic) ends up
+        // producing the title/content/relevance verdict below.
+        $heuristicParse = $this->contentExtractor->extract($rawHtml);
+        $publishedAt = $heuristicParse->publishedAt ?? $candidate->publishedAt;
+
+        $analysis = $this->articleAnalyzer->analyze($candidate, $heuristicParse, $rawHtml);
+
+        if (! $analysis->title) {
             return null; // nothing usable to publish under
         }
 
-        // Authoritative filter: title + whatever content we actually have,
-        // not just the weak prefilter signal.
-        if (! $this->aiFilter->isRelevant($title.' '.($content ?? ''))) {
+        if (! $analysis->isAiRelated) {
             return null;
         }
 
         try {
             return NewsItem::create([
                 'source_id' => $source->id,
-                'title' => $title,
+                'title' => $analysis->title,
                 'url' => $candidate->url,
                 'canonical_url' => $canonicalUrl,
                 'raw_html' => $rawHtml,
-                'content' => $content,
+                'content' => $analysis->content,
                 'published_at' => $publishedAt,
             ]);
         } catch (\Illuminate\Database\UniqueConstraintViolationException) {

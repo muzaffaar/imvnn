@@ -36,6 +36,12 @@ see `App\Services\News\AiRelevanceFilter`. `news:fetch` is also scheduled
 automatically every `fetch_interval_minutes` (see `routes/console.php`), so
 once sources are synced and workers are running, fetching happens on its own.
 
+**Optional: set `GEMINI_API_KEY` in `.env`** to have Gemini parse each
+article and judge its AI-relevance (instead of the free heuristic
+parser + keyword filter) — see
+[`docs/NEWS_FETCHING.md`](docs/NEWS_FETCHING.md#ai-relevance-filtering-and-analysis)
+for cost limits and fallback behavior. Leave it empty to skip Gemini entirely.
+
 ## Running the pipeline
 
 News fetching (`FetchNewsSourceJob` → `ProcessNewsCandidateJob`) creates a

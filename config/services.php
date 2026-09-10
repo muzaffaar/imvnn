@@ -40,4 +40,13 @@ return [
         'api_base_uri' => env('TELEGRAM_API_BASE_URI', 'https://api.telegram.org'),
     ],
 
+    'gemini' => [
+        'api_key' => env('GEMINI_API_KEY'),
+        // Check https://ai.google.dev/gemini-api/docs/models for the current
+        // cheapest model — pricing/lineup changes often, this default is not
+        // guaranteed to still be current or cheapest.
+        'model' => env('GEMINI_MODEL', 'gemini-2.5-flash-lite'),
+        'api_base_uri' => env('GEMINI_API_BASE_URI', 'https://generativelanguage.googleapis.com'),
+    ],
+
 ];
