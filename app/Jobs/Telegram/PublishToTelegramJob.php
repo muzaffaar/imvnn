@@ -93,8 +93,9 @@ class PublishToTelegramJob implements ShouldQueue
             }
         }
 
-        // TelegramPostComposer already folds the "watch the video" link into the
-        // caption for VideoThumbnailFallback, so no special-casing is needed here.
+        // The caption composer (see App\Services\Telegram\CaptionComposerInterface)
+        // already handles mentioning a VideoThumbnailFallback's video in the
+        // text itself (no link), so no special-casing is needed here.
         foreach ($assets as $asset) {
             try {
                 $result = $publisher->sendSinglePhoto($channel, $asset, $this->caption);

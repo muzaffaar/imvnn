@@ -89,8 +89,16 @@ class TelegramPublisher
             throw new TelegramApiException('TELEGRAM_BOT_TOKEN is not configured.');
         }
 
+        // Built as a full absolute URL rather than a relative path resolved
+        // against the client's base_uri: a bot token contains a colon
+        // (botNNN:AAFT...), and Guzzle/PSR-7 URI resolution treats a colon in
+        // a relative reference's first path segment as a scheme delimiter —
+        // "bot123:AAFT.../sendMessage" parses as scheme "bot123", not a path,
+        // failing with "The scheme 'bot123' is not supported." (RFC 3986 §4.2).
+        $url = rtrim(config('services.telegram.api_base_uri'), '/')."/bot{$token}/{$method}";
+
         try {
-            $response = $this->client->post("bot{$token}/{$method}", ['form_params' => $params]);
+            $response = $this->client->post($url, ['form_params' => $params]);
         } catch (GuzzleException $e) {
             throw new TelegramApiException("Telegram API transport error calling {$method}: {$e->getMessage()}", previous: $e);
         }

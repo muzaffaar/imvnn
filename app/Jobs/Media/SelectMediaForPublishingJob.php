@@ -13,7 +13,7 @@ use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\Media\Selection\MediaSelectionService;
 use App\Services\Media\Variants\MediaVariantService;
-use App\Services\Telegram\TelegramPostComposer;
+use App\Services\Telegram\CaptionComposerInterface;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -45,7 +45,7 @@ class SelectMediaForPublishingJob implements ShouldQueue
     public function handle(
         MediaSelectionService $selectionService,
         MediaVariantService $variantService,
-        TelegramPostComposer $composer,
+        CaptionComposerInterface $composer,
     ): void {
         $newsItem = NewsItem::findOrFail($this->newsItemId);
         $channel = TelegramChannel::findOrFail($this->telegramChannelId);

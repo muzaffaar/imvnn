@@ -10,6 +10,9 @@ use App\Services\Media\Extraction\MediaExtractionManager;
 use App\Services\Media\Extraction\RssMediaExtractor;
 use App\Services\Media\Deduplication\EmbeddingSimilarityDetectorInterface;
 use App\Services\Media\Deduplication\NullEmbeddingSimilarityDetector;
+use App\Services\Telegram\CaptionComposerInterface;
+use App\Services\Telegram\FallbackCaptionComposer;
+use App\Services\Telegram\GeminiCaptionComposer;
 use Illuminate\Support\ServiceProvider;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
@@ -25,6 +28,14 @@ class MediaServiceProvider extends ServiceProvider
             ->give(fn () => new \GuzzleHttp\Client([
                 'base_uri' => rtrim(config('services.telegram.api_base_uri'), '/').'/',
                 'timeout' => 15,
+            ]));
+
+        $this->app->bind(CaptionComposerInterface::class, FallbackCaptionComposer::class);
+
+        $this->app->when(GeminiCaptionComposer::class)
+            ->needs(\GuzzleHttp\Client::class)
+            ->give(fn () => new \GuzzleHttp\Client([
+                'base_uri' => rtrim(config('services.gemini.api_base_uri'), '/').'/',
             ]));
 
         $this->app->bind(EmbeddingSimilarityDetectorInterface::class, NullEmbeddingSimilarityDetector::class);

@@ -147,4 +147,28 @@ return [
         // docs/MEDIA_ARCHITECTURE.md "Video download decision" and platform ToS.
         'reference_only_providers' => ['youtube', 'twitter', 'x', 'instagram', 'tiktok', 'facebook'],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Telegram caption generation
+    |--------------------------------------------------------------------------
+    |
+    | Optional: GeminiCaptionComposer writes the actual post text — a short,
+    | bilingual (Uzbek + Russian) summary in whatever tone fits the story,
+    | no links — instead of the free PlainCaptionComposer (title + excerpt,
+    | original language, no translation). Disabled automatically if
+    | GEMINI_API_KEY is empty. Any Gemini failure falls back to
+    | PlainCaptionComposer for that post rather than failing the job — see
+    | FallbackCaptionComposer.
+    |
+    | Cost bounded the same way as the news-analysis Gemini call (per-call
+    | only, no cross-request budget tracking) — see
+    | docs/NEWS_FETCHING.md "Token/cost limits".
+    */
+    'telegram_caption' => [
+        'gemini_enabled' => env('GEMINI_CAPTION_ENABLED', true),
+        'max_output_tokens' => env('GEMINI_CAPTION_MAX_OUTPUT_TOKENS', 400),
+        'max_input_chars' => env('GEMINI_CAPTION_MAX_INPUT_CHARS', 4000),
+        'timeout_seconds' => env('GEMINI_CAPTION_TIMEOUT_SECONDS', 20),
+    ],
 ];
