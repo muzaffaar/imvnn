@@ -4,7 +4,12 @@ News media collection/processing pipeline (extraction, deduplication,
 quality/relevance scoring, storage, video processing, Telegram publishing)
 on a minimal Laravel news-pipeline stub. See
 [`docs/MEDIA_ARCHITECTURE.md`](docs/MEDIA_ARCHITECTURE.md) for the full
-design rationale.
+design rationale, [`docs/NEWS_FETCHING.md`](docs/NEWS_FETCHING.md) for the
+source/crawl side, and [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) to run it
+on a server.
+
+There is no HTTP surface — everything is queue- and CLI-driven, so no web
+server is required.
 
 ## Setup
 
