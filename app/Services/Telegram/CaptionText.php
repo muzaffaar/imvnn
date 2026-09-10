@@ -44,7 +44,10 @@ class CaptionText
         $seen = 0;
 
         return preg_replace_callback(
-            '/\p{Extended_Pictographic}(\x{FE0F}|\x{1F3FB}-\x{1F3FF})?/u',
+            // Extended_Pictographic is unavailable in the older PCRE2 build
+            // shipped by some supported Linux distributions. Keep the emoji
+            // cap portable by using the relevant Unicode ranges directly.
+            '/[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}](?:\x{FE0F}|\x{1F3FB}-\x{1F3FF})?/u',
             function (array $match) use (&$seen) {
                 $seen++;
 
