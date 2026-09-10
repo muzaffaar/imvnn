@@ -16,6 +16,18 @@ return [
     | page) to scan for article links. Each discovered link is then visited
     | individually to fetch and parse the actual article.
     |
+    | Optional `fetch_options` makes a difficult HTML source configurable
+    | without changing PHP. Supported keys:
+    | - allowed_hosts: additional exact hosts permitted for article/pagination URLs
+    | - include_url_patterns / exclude_url_patterns: case-sensitive `*` globs
+    |   matched against full URLs
+    | - excluded_path_segments: extra lowercase path segments to reject
+    | - article_link_xpath: XPath selecting only desired <a> elements
+    | - next_page_xpath and max_pages (1-10): bounded listing pagination
+    | - max_links (1-100): candidate cap for this source
+    | - skip_prefilter: only for trusted AI-only sources whose anchor text
+    |   does not reliably contain an AI keyword
+    |
     | Run `php artisan news-sources:sync` after editing this file to write
     | these into the `sources` table (upserted by `slug`, so editing an
     | existing entry and re-running is safe).
@@ -36,7 +48,16 @@ return [
         ['name' => 'MIT News — All', 'slug' => 'mit-news-all', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/rss/feed', 'reliability_score' => 90, 'media_reuse_permitted' => false],
         ['name' => 'Google Research Blog', 'slug' => 'google-research-blog', 'fetch_type' => 'rss', 'url' => 'https://research.google/blog/rss/', 'reliability_score' => 90, 'media_reuse_permitted' => false],
         ['name' => 'MIT Technology Review — AI', 'slug' => 'mit-technology-review-ai', 'fetch_type' => 'rss', 'url' => 'https://www.technologyreview.com/topic/artificial-intelligence/feed/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
-        // ['name' => 'Example Labs Blog', 'slug' => 'example-labs-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://example.com/blog', 'reliability_score' => 90, 'media_reuse_permitted' => true],
+        // ['name' => 'Example Labs Blog', 'slug' => 'example-labs-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://example.com/blog/', 'reliability_score' => 90, 'media_reuse_permitted' => true,
+        //     'fetch_options' => [
+        //         'article_link_xpath' => '//main//article//a[@href]',
+        //         'include_url_patterns' => ['https://example.com/blog/*'],
+        //         'exclude_url_patterns' => ['*/tag/*'],
+        //         'next_page_xpath' => '//a[@rel="next"]',
+        //         'max_pages' => 3,
+        //         'max_links' => 40,
+        //     ],
+        // ],
     ],
 
     /*

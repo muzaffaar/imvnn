@@ -36,6 +36,7 @@ class SyncNewsSourcesCommand extends Command
                     'name' => $entry['name'],
                     'fetch_type' => $entry['fetch_type'],
                     'source_url' => $entry['url'],
+                    'fetch_options' => $entry['fetch_options'] ?? [],
                     'type' => $entry['type'] ?? 'news_site',
                     'reliability_score' => $entry['reliability_score'] ?? 50,
                     'media_reuse_permitted' => $entry['media_reuse_permitted'] ?? false,

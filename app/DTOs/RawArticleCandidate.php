@@ -19,6 +19,8 @@ final class RawArticleCandidate
         public readonly ?string $rawHtml = null,
         /** Normalized shape RssMediaExtractor expects — see ExtractionContext::$rssItem. */
         public readonly ?array $rssItem = null,
+        /** Trusted source-specific opt-out for the cheap keyword prefilter. */
+        public readonly bool $skipPrefilter = false,
     ) {}
 
     /** Cheap text used for the pre-fetch AI relevance prefilter. */

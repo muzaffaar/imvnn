@@ -6,24 +6,19 @@ use App\DTOs\RawArticleCandidate;
 use App\Enums\SourceFetchType;
 use App\Models\Source;
 use App\Services\Http\BoundedHttpFetcher;
+use GuzzleHttp\Psr7\Uri;
+use GuzzleHttp\Psr7\UriResolver;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 /**
- * Scans a homepage/section page for links that look like articles, using
- * only URL-shape heuristics (same host, plausible slug, not an obvious
- * nav/tag/category/legal page) — this fetcher never tries to guess a title
- * or content from the listing page beyond the anchor text, since listing
- * markup varies wildly between sites. The actual article page is fetched
- * and parsed later, per candidate, by ArticleContentExtractor inside
- * ProcessNewsCandidateJob — kept separate so a slow/broken article page
- * can't fail the whole source's discovery pass.
+ * Discovers article links from a server-rendered homepage or section page.
  *
- * Requires positive evidence a link is an article, not just the absence of
- * obvious junk — every real news/blog site also links to dozens of nav/
- * taxonomy/product pages from every single page (see
- * docs/NEWS_FETCHING.md "HTML crawl heuristic" for the real sites this was
- * tuned against and why a weaker "any multi-segment path" rule let those
- * nav links drown out real articles).
+ * Generic URL-shape heuristics remain the safe default, while fetch_options
+ * lets an operator tune a difficult source without adding a new PHP class:
+ * allowed_hosts, include_url_patterns, exclude_url_patterns,
+ * excluded_path_segments, article_link_xpath, next_page_xpath, max_pages,
+ * max_links and skip_prefilter. XPath selectors must select <a> elements.
  */
 class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
 {
@@ -37,11 +32,6 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
         'magazines', 'supertopic',
     ];
 
-    /**
-     * First path segment values that, on their own (plus at least one more
-     * segment after them), are strong evidence of an individual post rather
-     * than a section index — e.g. "/news/some-post", "/blog/author/some-post".
-     */
     private const KNOWN_CONTENT_SECTIONS = [
         'news', 'blog', 'blogs', 'article', 'articles', 'press', 'posts', 'post',
         'stories', 'story', 'features', 'insights',
@@ -57,58 +47,116 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
     public function fetch(Source $source): Collection
     {
         $limits = config('news_sources.limits');
+        $options = is_array($source->fetch_options) ? $source->fetch_options : [];
+        $maxLinks = max(1, min((int) ($options['max_links'] ?? $limits['max_links_per_crawl']), 100));
+        $maxPages = max(1, min((int) ($options['max_pages'] ?? 1), 10));
+        $allowedHosts = $this->allowedHosts($source, $options);
+        $sourceFirstSegment = $this->firstPathSegment($source->source_url);
 
-        $html = $this->fetcher->downloadToMemory(
-            $source->source_url,
-            $limits['max_page_bytes'],
-            $limits['download_timeout_seconds'],
-            $limits['download_connect_timeout_seconds'],
-        );
+        $pages = [$source->source_url];
+        $visitedPages = [];
+        $candidates = collect();
 
+        while ($pages !== [] && count($visitedPages) < $maxPages && $candidates->count() < $maxLinks) {
+            $pageUrl = array_shift($pages);
+            if (! is_string($pageUrl) || isset($visitedPages[$pageUrl])) {
+                continue;
+            }
+            $visitedPages[$pageUrl] = true;
+
+            $html = $this->fetcher->downloadToMemory(
+                $pageUrl,
+                $limits['max_page_bytes'],
+                $limits['download_timeout_seconds'],
+                $limits['download_connect_timeout_seconds'],
+            );
+
+            $dom = $this->loadDom($html);
+            if (! $dom) {
+                continue;
+            }
+
+            foreach ($this->articleAnchors($dom, $options) as $anchor) {
+                $url = $this->resolveArticleUrl(
+                    $anchor->getAttribute('href'),
+                    $pageUrl,
+                    $allowedHosts,
+                    $sourceFirstSegment,
+                    $options,
+                );
+
+                if (! $url || $candidates->has($url)) {
+                    continue;
+                }
+
+                $text = trim(preg_replace('/\s+/', ' ', $anchor->textContent) ?? '');
+                $candidates->put($url, new RawArticleCandidate(
+                    url: $url,
+                    title: $text ?: null,
+                    skipPrefilter: (bool) ($options['skip_prefilter'] ?? false),
+                ));
+
+                if ($candidates->count() >= $maxLinks) {
+                    break;
+                }
+            }
+
+            if (count($visitedPages) < $maxPages && $candidates->count() < $maxLinks) {
+                $next = $this->nextPageUrl($dom, $pageUrl, $allowedHosts, $options);
+                if ($next && ! isset($visitedPages[$next])) {
+                    $pages[] = $next;
+                }
+            }
+        }
+
+        return $candidates->values();
+    }
+
+    private function loadDom(string $html): ?\DOMDocument
+    {
         $dom = new \DOMDocument;
         libxml_use_internal_errors(true);
         $loaded = $dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_NOERROR | LIBXML_NOWARNING);
         libxml_clear_errors();
 
-        if (! $loaded) {
-            return collect();
-        }
-
-        $host = parse_url($source->source_url, PHP_URL_HOST);
-        $sourceFirstSegment = $this->firstPathSegment($source->source_url);
-        $candidates = collect();
-
-        foreach ($dom->getElementsByTagName('a') as $anchor) {
-            $href = $anchor->getAttribute('href');
-            $url = $this->resolveArticleUrl($href, $source->source_url, $host, $sourceFirstSegment);
-
-            if (! $url || $candidates->has($url)) {
-                continue;
-            }
-
-            $text = trim(preg_replace('/\s+/', ' ', $anchor->textContent));
-
-            $candidates->put($url, new RawArticleCandidate(url: $url, title: $text ?: null));
-        }
-
-        return $candidates->values()->take($limits['max_links_per_crawl']);
+        return $loaded ? $dom : null;
     }
 
-    private function resolveArticleUrl(string $href, string $baseUrl, ?string $allowedHost, ?string $sourceFirstSegment): ?string
+    /** @param array<string, mixed> $options @return iterable<\DOMElement> */
+    private function articleAnchors(\DOMDocument $dom, array $options): iterable
     {
-        $href = trim($href);
-        if ($href === '' || str_starts_with($href, '#') || str_starts_with($href, 'mailto:') || str_starts_with($href, 'javascript:')) {
-            return null;
+        $xpath = new \DOMXPath($dom);
+        $expression = $options['article_link_xpath'] ?? '//a[@href]';
+
+        if (! is_string($expression)) {
+            return [];
         }
 
+        try {
+            $nodes = $xpath->query($expression);
+        } catch (\Throwable) {
+            return [];
+        }
+
+        if (! $nodes) {
+            return [];
+        }
+
+        return array_filter(iterator_to_array($nodes), fn ($node) => $node instanceof \DOMElement && strtolower($node->tagName) === 'a');
+    }
+
+    /** @param list<string> $allowedHosts @param array<string, mixed> $options */
+    private function resolveArticleUrl(string $href, string $baseUrl, array $allowedHosts, ?string $sourceFirstSegment, array $options): ?string
+    {
         $resolved = $this->resolve($href, $baseUrl);
         if (! $resolved) {
             return null;
         }
 
         $parts = parse_url($resolved);
-        if (empty($parts['host']) || $parts['host'] !== $allowedHost) {
-            return null; // stay on the source's own domain — no chasing outbound/syndication links
+        $host = strtolower($parts['host'] ?? '');
+        if ($host === '' || ! in_array($host, $allowedHosts, true)) {
+            return null;
         }
 
         $path = trim($parts['path'] ?? '', '/');
@@ -117,44 +165,67 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
         }
 
         $segments = explode('/', $path);
+        $excludedSegments = array_merge(self::EXCLUDED_PATH_SEGMENTS, $this->stringList($options['excluded_path_segments'] ?? []));
         foreach ($segments as $segment) {
-            if (in_array(strtolower($segment), self::EXCLUDED_PATH_SEGMENTS, true)) {
+            if (in_array(strtolower($segment), $excludedSegments, true)) {
                 return null;
             }
+        }
+
+        if ($this->matchesAnyPattern($resolved, $this->stringList($options['exclude_url_patterns'] ?? [], lowercase: false))) {
+            return null;
+        }
+
+        $includePatterns = $this->stringList($options['include_url_patterns'] ?? [], lowercase: false);
+        if ($includePatterns !== [] && ! $this->matchesAnyPattern($resolved, $includePatterns)) {
+            return null;
         }
 
         if (! $this->looksLikeArticle($segments, $sourceFirstSegment)) {
             return null;
         }
 
-        return strtok($resolved, '#'); // drop fragments
+        return $resolved;
     }
 
-    /**
-     * Positive evidence, any one of which is enough:
-     *   - a dated path with something after the year (.../2026/some-article,
-     *     .../2026/09/some-article) — a year segment that's the LAST segment
-     *     (.../blog/2026) is a year-archive index, not an article, and is
-     *     deliberately excluded (confirmed against research.google/blog,
-     *     which links every year back to /blog/2020 .. /blog/2026)
-     *   - starts with a known content-section word and goes at least one level deeper
-     *     (.../news/some-post, .../blog/author/some-post)
-     *   - starts with the same first segment as the source page we were told to
-     *     crawl, going deeper than that page itself (source-specific, since not
-     *     every site's section word is in KNOWN_CONTENT_SECTIONS)
-     *   - a single root-level segment that's a long, heavily-hyphenated slug
-     *     (some sites place featured posts at the bare root, e.g. anthropic.com)
-     */
+    /** @param list<string> $allowedHosts @param array<string, mixed> $options */
+    private function nextPageUrl(\DOMDocument $dom, string $baseUrl, array $allowedHosts, array $options): ?string
+    {
+        $expression = $options['next_page_xpath'] ?? null;
+        if (! is_string($expression) || $expression === '') {
+            return null;
+        }
+
+        try {
+            $nodes = (new \DOMXPath($dom))->query($expression);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (! $nodes) {
+            return null;
+        }
+
+        foreach ($nodes as $node) {
+            if (! $node instanceof \DOMElement || strtolower($node->tagName) !== 'a') {
+                continue;
+            }
+
+            $url = $this->resolve($node->getAttribute('href'), $baseUrl);
+            $host = strtolower(parse_url($url ?? '', PHP_URL_HOST) ?? '');
+            if ($url && in_array($host, $allowedHosts, true)) {
+                return $url;
+            }
+        }
+
+        return null;
+    }
+
     private function looksLikeArticle(array $segments, ?string $sourceFirstSegment): bool
     {
         $lastIndex = count($segments) - 1;
         $lastSegment = $segments[$lastIndex];
 
-        // A purely numeric final segment is a year/page-number archive or
-        // pagination index (.../blog/2026, .../blog/page/2), never an
-        // individual article slug — reject outright regardless of any
-        // positive signal below (confirmed against research.google/blog,
-        // which links every year archive from its own /blog listing).
         if (preg_match('/^\d+$/', $lastSegment)) {
             return false;
         }
@@ -176,42 +247,67 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
             return true;
         }
 
-        if ($depth === 1 && substr_count($segments[0], '-') >= 3) {
-            return true;
+        return $depth === 1 && substr_count($segments[0], '-') >= 3;
+    }
+
+    /** @param array<string, mixed> $options @return list<string> */
+    private function allowedHosts(Source $source, array $options): array
+    {
+        $configured = $this->stringList($options['allowed_hosts'] ?? []);
+        $default = strtolower(parse_url($source->source_url, PHP_URL_HOST) ?? '');
+
+        return array_values(array_unique(array_filter([...$configured, $default])));
+    }
+
+    /** @return list<string> */
+    private function stringList(mixed $value, bool $lowercase = true): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(
+            fn ($item) => is_string($item) ? ($lowercase ? strtolower(trim($item)) : trim($item)) : null,
+            $value,
+        )));
+    }
+
+    /** @param list<string> $patterns */
+    private function matchesAnyPattern(string $url, array $patterns): bool
+    {
+        foreach ($patterns as $pattern) {
+            if (Str::is($pattern, $url)) {
+                return true;
+            }
         }
 
         return false;
     }
 
-    private function firstPathSegment(string $url): ?string
+    private function firstPathSegment(?string $url): ?string
     {
-        $path = trim(parse_url($url, PHP_URL_PATH) ?? '', '/');
+        $path = trim(parse_url($url ?? '', PHP_URL_PATH) ?? '', '/');
 
         return $path !== '' ? strtolower(explode('/', $path)[0]) : null;
     }
 
     private function resolve(string $url, string $baseUrl): ?string
     {
-        if (preg_match('#^https?://#i', $url)) {
-            return $url;
-        }
-
-        $base = parse_url($baseUrl);
-        if (! $base || empty($base['host'])) {
+        $url = trim($url);
+        if ($url === '' || str_starts_with($url, '#') || str_starts_with($url, 'mailto:') || str_starts_with($url, 'javascript:')) {
             return null;
         }
 
-        $scheme = $base['scheme'] ?? 'https';
-        $host = $base['host'];
-
-        if (str_starts_with($url, '//')) {
-            return "{$scheme}:{$url}";
+        try {
+            $resolved = UriResolver::resolve(new Uri($baseUrl), new Uri($url));
+        } catch (\Throwable) {
+            return null;
         }
 
-        if (str_starts_with($url, '/')) {
-            return "{$scheme}://{$host}{$url}";
+        if (! in_array(strtolower($resolved->getScheme()), ['http', 'https'], true) || $resolved->getHost() === '') {
+            return null;
         }
 
-        return null; // relative-to-current-path hrefs on a listing page are rare enough not to bother resolving
+        return (string) $resolved->withFragment('');
     }
 }

@@ -73,7 +73,11 @@ lists mix the two:
   first sync from triggering hundreds of AI calls in one burst. Items
   already past the cap at first sync are never retroactively processed —
   intentional; the goal is ongoing new content, not backfilling a blog's
-  full history.
+  full history. Feed responses persist their HTTP `ETag` and `Last-Modified`
+  validators on the source row; subsequent polls send `If-None-Match` and
+  `If-Modified-Since`, so a compliant source can reply `304 Not Modified`
+  without transferring or parsing XML again. Every RSS `<enclosure>` is
+  preserved, rather than only the first attachment.
 - **`html_crawl`** (`HtmlCrawlSourceFetcher`) — for sites with no usable
   feed. Fetches one listing page (homepage or a section page) and looks for
   `<a>` links that *look like* individual articles, using only URL-shape
@@ -118,6 +122,31 @@ lists mix the two:
   page with a heavily-hyphenated slug, say) are expected and fine — they
   cost one wasted fetch and then get rejected by the AI relevance filter or
   fail to parse a coherent article, same as the spec's stated tolerance.
+
+### Source-specific crawl rules
+
+The generic heuristics are intentionally conservative. A source can override
+them through its `fetch_options` entry in `config/news_sources.php`, then
+`php artisan news-sources:sync` stores the options with the source row.
+
+```php
+'fetch_options' => [
+    'article_link_xpath' => '//main//article//a[@href]',
+    'include_url_patterns' => ['https://example.com/news/*'],
+    'exclude_url_patterns' => ['*/tag/*', '*/sponsored/*'],
+    'allowed_hosts' => ['news.example.com'],
+    'next_page_xpath' => '//a[@rel="next"]',
+    'max_pages' => 3, // bounded: 1–10
+    'max_links' => 40, // bounded: 1–100
+    'skip_prefilter' => true, // trusted AI-only source only
+],
+```
+
+`article_link_xpath` and `next_page_xpath` must select `<a>` elements. URL
+patterns are case-sensitive Laravel-style globs against the complete URL.
+Relative links are resolved according to RFC URL rules, so links such as
+`post-name`, `../post-name`, and `?page=2` now work. The configured source
+host remains allowed by default; `allowed_hosts` only adds exact hosts.
 
 ### Real sites this was tuned against
 

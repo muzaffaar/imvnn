@@ -8,6 +8,7 @@ use App\Models\NewsItem;
 use App\Models\Source;
 use App\Services\Http\BoundedHttpFetcher;
 use App\Services\Media\Deduplication\UrlNormalizer;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -39,7 +40,9 @@ class NewsIngestionService
         // Cheap prefilter before spending an HTTP fetch (or an AI call) —
         // matters most for html_crawl candidates, where this is anchor text,
         // our only signal before visiting the page.
-        if ($candidate->prefilterText() !== '' && ! $this->prefilter->isRelevant($candidate->prefilterText())) {
+        if (! $candidate->skipPrefilter
+            && $candidate->prefilterText() !== ''
+            && ! $this->prefilter->isRelevant($candidate->prefilterText())) {
             return null;
         }
 
@@ -95,7 +98,7 @@ class NewsIngestionService
                 'content' => $analysis->content,
                 'published_at' => $publishedAt,
             ]);
-        } catch (\Illuminate\Database\UniqueConstraintViolationException) {
+        } catch (UniqueConstraintViolationException) {
             return null; // lost a race with a concurrent fetch of the same article
         }
     }

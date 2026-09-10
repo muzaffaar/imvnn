@@ -55,6 +55,57 @@ class BoundedHttpFetcher
     }
 
     /**
+     * Download a response only when the origin says it changed. This is used
+     * for frequently polled feeds: HTTP 304 transfers no XML and avoids
+     * parsing an unchanged source.
+     *
+     * @throws BoundedHttpFetchException
+     */
+    public function downloadToMemoryConditionally(
+        string $url,
+        int $maxBytes,
+        ?int $timeoutSeconds = null,
+        ?int $connectTimeoutSeconds = null,
+        ?string $etag = null,
+        ?string $lastModified = null,
+    ): ConditionalDownload {
+        $headers = array_filter([
+            'If-None-Match' => $etag,
+            'If-Modified-Since' => $lastModified,
+        ], fn (?string $value) => $value !== null && $value !== '');
+
+        $response = $this->get($url, $timeoutSeconds, $connectTimeoutSeconds, $headers);
+
+        if ($response->getStatusCode() === 304) {
+            return new ConditionalDownload(
+                body: null,
+                etag: $response->getHeaderLine('ETag') ?: $etag,
+                lastModified: $response->getHeaderLine('Last-Modified') ?: $lastModified,
+            );
+        }
+
+        $body = $response->getBody();
+        $contents = '';
+
+        while (! $body->eof()) {
+            $contents .= $body->read(8192);
+            if (strlen($contents) > $maxBytes) {
+                throw new BoundedHttpFetchException("Response exceeded {$maxBytes} byte limit while downloading {$url}");
+            }
+        }
+
+        if ($contents === '') {
+            throw new BoundedHttpFetchException("Empty response body downloading {$url}");
+        }
+
+        return new ConditionalDownload(
+            body: $contents,
+            etag: $response->getHeaderLine('ETag') ?: null,
+            lastModified: $response->getHeaderLine('Last-Modified') ?: null,
+        );
+    }
+
+    /**
      * Fetches only the first $bytes of a resource via a Range request, for
      * reading a file header without transferring (or storing) the file —
      * see ImageDimensionProbe. Servers that ignore Range simply return the
@@ -139,7 +190,8 @@ class BoundedHttpFetcher
         }
     }
 
-    private function get(string $url, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null): ResponseInterface
+    /** @param array<string, string> $additionalHeaders */
+    private function get(string $url, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null, array $additionalHeaders = []): ResponseInterface
     {
         try {
             return $this->client->get($url, [
@@ -147,7 +199,7 @@ class BoundedHttpFetcher
                 'connect_timeout' => $connectTimeoutSeconds ?? config('media.limits.download_connect_timeout_seconds'),
                 'allow_redirects' => true,
                 'stream' => true,
-                'headers' => $this->browserHeaders(),
+                'headers' => array_merge($this->browserHeaders(), $additionalHeaders),
             ]);
         } catch (GuzzleException $e) {
             throw new BoundedHttpFetchException("Failed to fetch {$url}: {$e->getMessage()}", previous: $e);

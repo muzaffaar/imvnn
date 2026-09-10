@@ -29,14 +29,25 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
     {
         $limits = config('news_sources.limits');
 
-        $xml = $this->fetcher->downloadToMemory(
+        $download = $this->fetcher->downloadToMemoryConditionally(
             $source->source_url,
             $limits['max_feed_bytes'],
             $limits['download_timeout_seconds'],
             $limits['download_connect_timeout_seconds'],
+            $source->feed_etag,
+            $source->feed_last_modified,
         );
 
-        $feed = $this->parseXml($xml);
+        $source->fill([
+            'feed_etag' => $download->etag,
+            'feed_last_modified' => $download->lastModified,
+        ])->save();
+
+        if ($download->wasNotModified()) {
+            return collect();
+        }
+
+        $feed = $this->parseXml($download->body);
         if (! $feed) {
             return collect();
         }
@@ -183,15 +194,21 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
             return [];
         }
 
-        $attrs = $item->enclosure->attributes();
-        if (empty($attrs['url'])) {
-            return [];
+        $enclosures = [];
+
+        foreach ($item->enclosure as $enclosure) {
+            $attrs = $enclosure->attributes();
+            if (empty($attrs['url'])) {
+                continue;
+            }
+
+            $enclosures[] = array_filter([
+                'url' => (string) $attrs['url'],
+                'type' => isset($attrs['type']) ? (string) $attrs['type'] : null,
+            ], fn ($v) => $v !== null);
         }
 
-        return [array_filter([
-            'url' => (string) $attrs['url'],
-            'type' => isset($attrs['type']) ? (string) $attrs['type'] : null,
-        ], fn ($v) => $v !== null)];
+        return $enclosures;
     }
 
     private function parseDate(string $value): ?CarbonImmutable
