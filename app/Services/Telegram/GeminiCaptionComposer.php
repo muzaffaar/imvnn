@@ -103,7 +103,7 @@ class GeminiCaptionComposer implements CaptionComposerInterface
             return null;
         }
 
-        return "<i>😄 {$line}</i>";
+        return "<i>{$line}</i>";
     }
 
     /** @return list<array{key: string, name: string, flag: ?string}> */
