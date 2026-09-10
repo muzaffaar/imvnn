@@ -58,20 +58,97 @@ lists mix the two:
   Title, summary/`content:encoded`, and publish date come straight from the
   feed; the full article page is still fetched afterward (see below) so the
   HTML-based extractors (`HtmlMetadataExtractor`, `HtmlContentExtractor`) have
-  something to work with too.
+  something to work with too. Iterates every `<item>`/`<entry>` with a plain
+  `foreach`, deliberately not `collect($items)->map(...)`: every sibling
+  shares the same SimpleXML iterator key, and `Collection::make()` converts
+  via `iterator_to_array($items)` — which defaults to preserving keys,
+  silently collapsing all-but-one of several same-keyed siblings into a
+  single array slot. Caught by testing against a real 10-item feed that this
+  returned exactly 1 candidate; every configured RSS source was almost
+  certainly only ever seeing its single most recent item per fetch until
+  this was found and fixed. Capped to `news_sources.limits.max_items_per_feed_fetch`
+  (default 20, newest-first per feed convention) — some real feeds carry a
+  large historical backlog (confirmed: `huggingface.co/blog/feed.xml` has
+  860 items, `research.google`'s has 100), and the cap keeps a new source's
+  first sync from triggering hundreds of Gemini calls in one burst. Items
+  already past the cap at first sync are never retroactively processed —
+  intentional; the goal is ongoing new content, not backfilling a blog's
+  full history.
 - **`html_crawl`** (`HtmlCrawlSourceFetcher`) — for sites with no usable
   feed. Fetches one listing page (homepage or a section page) and looks for
-  `<a>` links that *look like* articles, using only URL-shape heuristics:
-  same host as the source (never follow off-site/syndication links), not
-  under an excluded path segment (`/tag/`, `/category/`, `/author/`,
-  `/search/`, etc.), and either a reasonably deep path or a long hyphenated
-  slug. This is deliberately conservative — false negatives (missing a real
-  article) are fine, false positives (queuing a tag/category page as an
-  "article") waste a fetch and usually just get rejected by the AI filter
-  anyway. Anchor text becomes the weak prefilter signal (see below); the
-  crawler never tries to guess a title/body from the listing markup itself,
-  since that varies too much between sites to heuristic reliably — the
-  actual article page is always fetched and parsed individually.
+  `<a>` links that *look like* individual articles, using only URL-shape
+  heuristics — no title/body guessing from the listing markup, since that
+  varies too much between sites; the actual article page is always fetched
+  and parsed individually. Anchor text (when present) becomes the weak
+  prefilter signal (see below).
+
+  A link must clear a deny-list first — same host only (never follow
+  off-site/syndication links) and not under an excluded path segment
+  (`/tag/`, `/category/`, `/label/`, `/author/`, `/search/`, `/pricing/`,
+  `/products/`, and more — see `EXCLUDED_PATH_SEGMENTS`, grown directly from
+  the real junk links below) — and then clear a positive-evidence bar, not
+  just "not obviously junk":
+
+  1. a dated path with something *after* the year (`/2026/some-article`,
+     `/2026/09/some-article`) — but a year as the *last* segment
+     (`/blog/2026`) is a year-archive index, not an article, and is rejected
+     even though it "has a date";
+  2. starts with a known content-section word (`news`, `blog`, `press`,
+     `features`, ...) and goes at least one level deeper (`/news/some-post`,
+     `/blog/author/some-post`) — not the section index itself (`/blog`);
+  3. starts with the same first path segment as the source page it was told
+     to crawl, going deeper than that page (source-specific, for sites whose
+     section word isn't in the fixed list above);
+  4. a single root-level segment that's a long, heavily-hyphenated slug —
+     some sites place featured posts at the bare root with no section prefix
+     at all.
+
+  A purely numeric final segment (`/blog/2026`, `/blog/page/2`) is rejected
+  outright regardless of which rule would otherwise match — this is what
+  rule 1's "year can't be last" carve-out and the general pagination-index
+  exclusion both boil down to. This bar exists because the weaker original
+  version ("any 2+-segment path, or a long hyphenated slug") is *not*
+  conservative enough in practice: every real site's global nav menu links
+  dozens of taxonomy/product/legal pages from every single page, and those
+  links are just as likely to satisfy "multi-segment path" as an actual
+  article — see "Real sites this was tuned against" below for the exact
+  false positives that motivated each rule.
+
+  Even with the stricter bar, remaining false positives (a "write for us"
+  page with a heavily-hyphenated slug, say) are expected and fine — they
+  cost one wasted fetch and then get rejected by the AI relevance filter or
+  fail to parse a coherent article, same as the spec's stated tolerance.
+
+### Real sites this was tuned against
+
+Tested live against `anthropic.com/news`, `huggingface.co/blog`,
+`mistral.ai/news`, `news.mit.edu` (homepage and topic-filtered), and
+`research.google/blog`. Two real, non-obvious problems, now fixed:
+
+- **A self-identifying bot User-Agent gets flat-out HTTP 403'd** by several
+  of these sites (confirmed: anthropic.com, huggingface.co) even though
+  there's no real anti-bot *challenge* behind it (no JS challenge, no
+  CAPTCHA) — they simply filter on User-Agent string. A realistic browser
+  UA + `Accept`/`Accept-Language` headers (`BoundedHttpFetcher::browserHeaders()`,
+  `config('media.limits.user_agent')`) was sufficient for all of them; **no
+  headless browser was needed** for any of the sites tested.
+- **Nav menus drown out real articles** without the positive-evidence bar
+  above — e.g. mistral.ai's page returned 20 product/pricing links and zero
+  actual news posts under the old heuristic, because a same-host multi-segment
+  path was treated as sufficient evidence on its own. research.google/blog
+  additionally exposed a subtler case: its own year-archive links
+  (`/blog/2020` .. `/blog/2026`) satisfied *both* the date-pattern rule and
+  the known-section rule before the "numeric last segment" exclusion was
+  added, since neither rule alone checked whether the year was actually
+  followed by more path.
+
+Where a real RSS feed existed under a non-obvious URL, it was used instead
+of crawling (more reliable in general — see below): `huggingface.co/blog/feed.xml`,
+`mistral.ai/rss.xml`, `research.google/blog/rss/`, `news.mit.edu/rss/feed`,
+`news.mit.edu/rss/topic/{topic-slug}`, and MIT Technology Review's
+`/topic/{topic}/feed/` pattern — none of these are linked from their
+respective pages, only discoverable by trying the common WordPress/site
+conventions. Anthropic had no discoverable feed and is crawled.
 
 ## Article parsing (`ArticleContentExtractor`)
 

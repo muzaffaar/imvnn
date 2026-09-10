@@ -53,6 +53,16 @@ return [
         'download_timeout_seconds' => 20,
         'download_connect_timeout_seconds' => 5,
 
+        // A self-identifying bot UA gets flat-out 403'd by several real
+        // sites with no real anti-bot challenge behind it — see
+        // BoundedHttpFetcher::browserHeaders(). Pin an exact Chrome version
+        // rather than chasing "latest" — consistency matters more than
+        // currency here.
+        'user_agent' => env(
+            'HTTP_FETCH_USER_AGENT',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        ),
+
         'allowed_image_mime_types' => ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
         'allowed_video_mime_types' => ['video/mp4', 'video/webm', 'video/quicktime'],
         'allowed_document_mime_types' => ['application/pdf'],

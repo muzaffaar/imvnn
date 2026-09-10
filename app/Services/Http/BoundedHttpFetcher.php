@@ -24,6 +24,7 @@ class BoundedHttpFetcher
                 'timeout' => $timeoutSeconds ?? config('media.limits.download_timeout_seconds'),
                 'connect_timeout' => $connectTimeoutSeconds ?? config('media.limits.download_connect_timeout_seconds'),
                 'allow_redirects' => true,
+                'headers' => $this->browserHeaders(),
             ]);
         } catch (GuzzleException) {
             return null;
@@ -95,11 +96,28 @@ class BoundedHttpFetcher
                 'connect_timeout' => $connectTimeoutSeconds ?? config('media.limits.download_connect_timeout_seconds'),
                 'allow_redirects' => true,
                 'stream' => true,
-                'headers' => ['User-Agent' => 'Mozilla/5.0 (compatible; NewsMediaBot/1.0)'],
+                'headers' => $this->browserHeaders(),
             ]);
         } catch (GuzzleException $e) {
             throw new BoundedHttpFetchException("Failed to fetch {$url}: {$e->getMessage()}", previous: $e);
         }
+    }
+
+    /**
+     * A self-identifying bot User-Agent (e.g. "NewsMediaBot/1.0") gets flat
+     * out 403'd by several real news/blog sites (confirmed against
+     * anthropic.com, huggingface.co, and others) even though they have no
+     * real anti-bot challenge — they just filter on User-Agent. A realistic
+     * browser UA + Accept headers is enough for all of them; none needed a
+     * headless browser once this was fixed.
+     */
+    private function browserHeaders(): array
+    {
+        return [
+            'User-Agent' => config('media.limits.user_agent'),
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language' => 'en-US,en;q=0.9',
+        ];
     }
 
     /** @return array{content_length: ?int, content_type: ?string} */

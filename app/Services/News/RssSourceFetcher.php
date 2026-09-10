@@ -44,13 +44,25 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
         $namespaces = $feed->getNamespaces(true);
         $isAtom = isset($feed->entry) || $feed->getName() === 'feed';
 
-        $items = $isAtom
-            ? $feed->entry
-            : ($feed->channel->item ?? collect());
+        $items = $isAtom ? $feed->entry : ($feed->channel->item ?? null);
 
-        return collect($items)->map(function (SimpleXMLElement $item) use ($isAtom, $namespaces) {
-            return $isAtom ? $this->fromAtomEntry($item, $namespaces) : $this->fromRssItem($item, $namespaces);
-        })->filter(fn (?RawArticleCandidate $c) => $c !== null)->values();
+        $results = collect();
+
+        // Deliberately a plain foreach, not collect($items)->map(...): every
+        // sibling <item>/<entry> shares the same SimpleXML iterator key, and
+        // Collection::make() converts via iterator_to_array($items) — which
+        // defaults to preserving keys, silently collapsing all-but-one of
+        // several same-keyed siblings into a single array slot. Confirmed
+        // against a real 10-item feed that this returns 1.
+        if ($items !== null) {
+            foreach ($items as $item) {
+                $results->push($isAtom ? $this->fromAtomEntry($item, $namespaces) : $this->fromRssItem($item, $namespaces));
+            }
+        }
+
+        return $results->filter(fn (?RawArticleCandidate $c) => $c !== null)
+            ->values()
+            ->take($limits['max_items_per_feed_fetch']);
     }
 
     private function parseXml(string $xml): ?SimpleXMLElement

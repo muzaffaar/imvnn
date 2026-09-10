@@ -271,18 +271,18 @@ different (text-only) article about the same event.
 
 Nothing in the pipeline auto-selects an article for publishing — that would
 mean the moment several good articles finish media analysis around the same
-time, they'd all get posted in a burst. Instead, one article at a time, at a
-random human-scale interval, per this requirement: *even with multiple good
-candidates ready, publish periodically, randomly, every 15 minutes to 2
-hours* — not all at once.
+time, they'd all get posted in a burst. Instead, one article at a time, per
+this requirement: *post every 2 hours normally; if more good news is ready,
+post faster — randomly, between 15 minutes and 2 hours — scaled by how much
+is waiting*, not all at once regardless of backlog size.
 
 `PublishNextReadyNewsItemJob` is a **self-perpetuating** job: each run picks
 at most one candidate, dispatches it, and — in a `finally` block, so this
 happens whether or not a candidate was found or the dispatch succeeded —
-reschedules itself with `->delay(now()->addSeconds(random_int(min, max)))`.
-Laravel's own job retry is deliberately disabled (`$tries = 1`) so a failed
-attempt can't spawn a second parallel chain; the `finally` reschedule is the
-only thing keeping it alive, by design.
+reschedules itself with a computed delay (see Cadence below). Laravel's own
+job retry is deliberately disabled (`$tries = 1`) so a failed attempt can't
+spawn a second parallel chain; the `finally` reschedule is the only thing
+keeping it alive, by design.
 
 Started once per channel with `php artisan publishing:start {channel}`.
 Running it twice starts a second, independent chain — each claim is atomic
@@ -312,10 +312,22 @@ stays claimed forever rather than being retried automatically, consistent
 with treating a total posting failure as something a human should look at,
 not paper over (see the fallback ladder below).
 
-**Cadence** is per-channel, read from `TelegramChannel.rules`
-(`min_publish_interval_minutes` / `max_publish_interval_minutes`, default
-15 / 120) — the same JSON blob that already holds `prefer_video`,
-`max_images`, etc., so tuning it needs no deploy.
+**Cadence** is per-channel, read from `TelegramChannel.rules` (same JSON
+blob that already holds `prefer_video`, `max_images`, etc., so tuning needs
+no deploy) via `computeDelaySeconds()`:
+
+- **No other candidate waiting** (`backlogCount == 0`): the delay is exactly
+  `max_publish_interval_minutes` (default 120 = 2h) — a steady drip when
+  supply is scarce, not randomized, since there's nothing to rush for.
+- **Backlog present**: the delay is random between `min_publish_interval_minutes`
+  (default 15) and a ceiling that shrinks from the 2h baseline down toward
+  15 minutes as the backlog grows, reaching the 15-minute floor once the
+  backlog hits `publish_backlog_saturation_count` (default 5) — i.e. the
+  more good news is queued up, the faster (and still randomly-timed) it
+  gets worked through. Backlog size is recomputed on every reschedule
+  (the same eligibility query `pickBestCandidate()` uses, minus the ranking),
+  so the pacing continuously adapts as new articles finish analysis or get
+  claimed.
 
 ## Publishing fallback ladder
 

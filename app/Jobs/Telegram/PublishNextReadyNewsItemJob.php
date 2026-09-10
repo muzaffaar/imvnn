@@ -16,18 +16,23 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * The publishing scheduler: picks the single best ready-and-unpublished
- * article for a channel, dispatches it, then reschedules itself after a
- * random delay — so even with several good candidates backlogged, the
- * channel only ever gets one post per random(min, max) interval rather than
- * a burst. Started once per channel via `php artisan publishing:start
- * {channel}` (see StartPublishingSchedulerCommand); from then on it keeps
- * itself alive forever via the `finally` block below, regardless of whether
- * a candidate was found or the attempt succeeded.
+ * article for a channel, dispatches it, then reschedules itself — so even
+ * with several good candidates backlogged, the channel only ever gets one
+ * post at a time, never a burst. Started once per channel via
+ * `php artisan publishing:start {channel}` (see
+ * StartPublishingSchedulerCommand); from then on it keeps itself alive
+ * forever via the `finally` block below, regardless of whether a candidate
+ * was found or the attempt succeeded.
  *
- * `min_publish_interval_minutes` / `max_publish_interval_minutes` are read
- * from the channel's `rules` JSON (default 15 / 120 minutes), so cadence is
- * configurable per channel like every other publishing rule — see
- * TelegramChannel::rule().
+ * Cadence: `max_publish_interval_minutes` (default 120 = 2h) is the
+ * baseline — with nothing else waiting, that's the wait before the next
+ * check. With a backlog of other ready candidates, the wait becomes random
+ * between `min_publish_interval_minutes` (default 15) and a ceiling that
+ * shrinks from the baseline down toward the minimum as the backlog grows,
+ * saturating fully at `publish_backlog_saturation_count` (default 5)
+ * candidates — i.e. "2 hours normally, but faster, randomly, the more good
+ * news there is waiting." All four are per-channel `rules` (see
+ * TelegramChannel::rule()), same as every other publishing rule.
  */
 class PublishNextReadyNewsItemJob implements ShouldQueue
 {
@@ -62,12 +67,17 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
         }
     }
 
-    private function pickBestCandidate(): ?NewsItem
+    private function eligibleQuery(): \Illuminate\Database\Eloquent\Builder
     {
         return NewsItem::query()
             ->whereNotNull('media_analysis_completed_at')
             ->whereNull('publish_queued_at')
-            ->whereNull('telegram_published_at')
+            ->whereNull('telegram_published_at');
+    }
+
+    private function pickBestCandidate(): ?NewsItem
+    {
+        return $this->eligibleQuery()
             ->withMax(['mediaAssets as best_quality_score' => function ($query) {
                 $query->where('status', MediaStatus::Ready->value);
             }], 'quality_score')
@@ -97,10 +107,33 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
 
         $minMinutes = (int) $channel->rule('min_publish_interval_minutes', 15);
         $maxMinutes = (int) $channel->rule('max_publish_interval_minutes', 120);
-        $delaySeconds = random_int($minMinutes * 60, $maxMinutes * 60);
+        $backlogCount = $this->eligibleQuery()->count();
+
+        $delaySeconds = $this->computeDelaySeconds($minMinutes, $maxMinutes, $backlogCount, $channel);
 
         self::dispatch($channel->id)->delay(now()->addSeconds($delaySeconds));
 
-        Log::info("[publishing-scheduler] channel={$channel->id} next check in {$delaySeconds}s");
+        Log::info("[publishing-scheduler] channel={$channel->id} backlog={$backlogCount} next check in {$delaySeconds}s");
+    }
+
+    /**
+     * No backlog: exactly the baseline (2h default) — a steady drip when
+     * supply is scarce. With a backlog, the ceiling shrinks from the
+     * baseline toward the floor as the backlog grows (fully saturated at
+     * `publish_backlog_saturation_count` candidates), and the actual delay
+     * is random within [floor, ceiling] — faster on average with more good
+     * news waiting, but never faster than the floor and never a fixed value.
+     */
+    private function computeDelaySeconds(int $minMinutes, int $maxMinutes, int $backlogCount, TelegramChannel $channel): int
+    {
+        if ($backlogCount <= 0) {
+            return $maxMinutes * 60;
+        }
+
+        $saturationCount = max(1, (int) $channel->rule('publish_backlog_saturation_count', 5));
+        $saturation = min(1.0, $backlogCount / $saturationCount);
+        $effectiveMaxMinutes = max($minMinutes, (int) round($maxMinutes - $saturation * ($maxMinutes - $minMinutes)));
+
+        return random_int($minMinutes * 60, $effectiveMaxMinutes * 60);
     }
 }

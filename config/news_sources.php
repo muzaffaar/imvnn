@@ -27,6 +27,15 @@ return [
     'sources' => [
         ['name' => 'MIT News — Robotics', 'slug' => 'mit-news-robotics', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/topic/mitrobotics-rss.xml', 'reliability_score' => 90, 'media_reuse_permitted' => false],
         ['name' => 'Google Blog', 'slug' => 'google-blog', 'fetch_type' => 'rss', 'url' => 'https://blog.google/rss/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
+
+        // Anthropic has no discoverable RSS feed — crawled instead.
+        ['name' => 'Anthropic News', 'slug' => 'anthropic-news', 'fetch_type' => 'html_crawl', 'url' => 'https://www.anthropic.com/news', 'reliability_score' => 95, 'media_reuse_permitted' => false],
+        ['name' => 'Hugging Face Blog', 'slug' => 'huggingface-blog', 'fetch_type' => 'rss', 'url' => 'https://huggingface.co/blog/feed.xml', 'reliability_score' => 80, 'media_reuse_permitted' => false],
+        ['name' => 'Mistral AI News', 'slug' => 'mistral-ai-news', 'fetch_type' => 'rss', 'url' => 'https://mistral.ai/rss.xml', 'reliability_score' => 90, 'media_reuse_permitted' => false],
+        ['name' => 'MIT News — Artificial Intelligence', 'slug' => 'mit-news-ai', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/rss/topic/artificial-intelligence2', 'reliability_score' => 90, 'media_reuse_permitted' => false],
+        ['name' => 'MIT News — All', 'slug' => 'mit-news-all', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/rss/feed', 'reliability_score' => 90, 'media_reuse_permitted' => false],
+        ['name' => 'Google Research Blog', 'slug' => 'google-research-blog', 'fetch_type' => 'rss', 'url' => 'https://research.google/blog/rss/', 'reliability_score' => 90, 'media_reuse_permitted' => false],
+        ['name' => 'MIT Technology Review — AI', 'slug' => 'mit-technology-review-ai', 'fetch_type' => 'rss', 'url' => 'https://www.technologyreview.com/topic/artificial-intelligence/feed/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
         // ['name' => 'Example Labs Blog', 'slug' => 'example-labs-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://example.com/blog', 'reliability_score' => 90, 'media_reuse_permitted' => true],
     ],
 
@@ -71,6 +80,15 @@ return [
         'max_links_per_crawl' => 20,
         'download_timeout_seconds' => 15,
         'download_connect_timeout_seconds' => 5,
+
+        // Some real feeds carry a large historical backlog (confirmed:
+        // huggingface.co/blog/feed.xml has 860 items, research.google's has
+        // 100) — capped per fetch so the first sync of a new source doesn't
+        // trigger hundreds of Gemini calls in one burst. Feeds list newest
+        // first, so this deliberately means old backlog items already past
+        // the cap at first sync are never retroactively processed — the goal
+        // is to catch ongoing new content, not backfill a blog's full history.
+        'max_items_per_feed_fetch' => 20,
     ],
 
     // How often the scheduler polls every active source (see routes/console.php).
