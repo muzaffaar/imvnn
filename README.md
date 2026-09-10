@@ -8,15 +8,29 @@ design rationale.
 
 ## Setup
 
+Full sequence from a clean checkout — or from a `migrate:fresh`, which
+drops every table including the channel and all publish history:
+
 ```
 composer install
-cp .env.example .env   # then fill in DB_*, AWS_* (or MinIO), TELEGRAM_BOT_TOKEN
+cp .env.example .env   # then fill in DB_*, TELEGRAM_BOT_TOKEN, GEMINI_API_KEY
 php artisan key:generate
 php artisan migrate
+
+php artisan news-sources:sync        # config/news_sources.php -> sources table
+php artisan telegram:channel @your_channel   # verifies the bot is an admin there
+php artisan publishing:start 1       # id printed by the previous command
 ```
+
+Then start the workers (see [Running the pipeline](#running-the-pipeline)).
 
 Requires PostgreSQL (for `jsonb` columns), and `ffmpeg`/`ffprobe` on `PATH`
 (or set `FFMPEG_BINARY`/`FFPROBE_BINARY`) for video processing.
+
+> **`migrate:fresh` erases publish history.** `telegram_published_at` is
+> what stops an article being posted twice, so anything already posted
+> *today* becomes eligible again and will repost. Older articles are
+> unaffected — the freshness filter blocks them regardless.
 
 ## Adding news sources
 
