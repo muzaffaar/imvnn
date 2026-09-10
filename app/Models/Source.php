@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\SourceFetchType;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -9,6 +10,7 @@ class Source extends Model
 {
     protected $fillable = [
         'name', 'slug', 'base_url', 'type', 'reliability_score', 'media_reuse_permitted',
+        'fetch_type', 'source_url', 'is_active', 'last_fetched_at',
     ];
 
     protected function casts(): array
@@ -16,6 +18,9 @@ class Source extends Model
         return [
             'reliability_score' => 'integer',
             'media_reuse_permitted' => 'boolean',
+            'fetch_type' => SourceFetchType::class,
+            'is_active' => 'boolean',
+            'last_fetched_at' => 'datetime',
         ];
     }
 

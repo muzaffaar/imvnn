@@ -9,8 +9,8 @@ use App\Enums\ProcessingLogStatus;
 use App\Enums\ProcessingStage;
 use App\Models\MediaAsset;
 use App\Models\MediaProcessingLog;
+use App\Services\Http\BoundedHttpFetcher;
 use App\Services\Media\Deduplication\MediaDuplicateDetectionService;
-use App\Services\Media\MediaDownloader;
 use App\Services\Media\MediaMetadataExtractor;
 use App\Services\Media\MediaPipelineProgressTracker;
 use App\Services\Media\Storage\MediaStorageService;
@@ -45,7 +45,7 @@ class DownloadMediaJob implements ShouldQueue
     }
 
     public function handle(
-        MediaDownloader $downloader,
+        BoundedHttpFetcher $downloader,
         MediaDuplicateDetectionService $duplicateDetection,
         MediaMetadataExtractor $metadataExtractor,
         MediaStorageService $storage,
@@ -59,7 +59,7 @@ class DownloadMediaJob implements ShouldQueue
 
     private function process(
         MediaAsset $asset,
-        MediaDownloader $downloader,
+        BoundedHttpFetcher $downloader,
         MediaDuplicateDetectionService $duplicateDetection,
         MediaMetadataExtractor $metadataExtractor,
         MediaStorageService $storage,

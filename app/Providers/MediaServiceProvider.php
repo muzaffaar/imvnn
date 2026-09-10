@@ -27,10 +27,6 @@ class MediaServiceProvider extends ServiceProvider
                 'timeout' => 15,
             ]));
 
-        $this->app->when(\App\Services\Media\MediaDownloader::class)
-            ->needs(\GuzzleHttp\Client::class)
-            ->give(fn () => new \GuzzleHttp\Client);
-
         $this->app->bind(EmbeddingSimilarityDetectorInterface::class, NullEmbeddingSimilarityDetector::class);
         $this->app->bind(
             \App\Services\Media\Scoring\VisionRelevanceAnalyzerInterface::class,

@@ -7,12 +7,15 @@ cross-cutting decisions that don't belong in any one file.
 
 ## Scope of this codebase
 
-This repo implements the **media pipeline** on top of a deliberately minimal
-stand-in for the broader news pipeline (`sources`, `news_items`, `events`,
-`telegram_channels`). Event clustering, news scoring, and "is this article a
-publication candidate" are out of scope — `NewsItem::event_id` and
-`TelegramChannel` exist just deep enough for the media pipeline to be
-exercised end-to-end (see the smoke test pattern used during development).
+This repo implements the **media pipeline**, plus enough of a **news-fetching
+pipeline** (`App\Services\News`, `App\Jobs\News` — see
+[`docs/NEWS_FETCHING.md`](NEWS_FETCHING.md)) to actually populate `NewsItem`
+rows from real RSS feeds and crawled pages, feeding directly into
+`ExtractMediaJob` below. Event *clustering* (deciding which articles describe
+the same real-world happening) and news *scoring/prioritization* (deciding
+which candidate articles are worth publishing at all) remain out of scope —
+`NewsItem::event_id` and `TelegramChannel` exist just deep enough for the
+media pipeline to be exercised end-to-end.
 
 ## Pipeline overview
 

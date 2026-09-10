@@ -7,8 +7,8 @@ use App\Enums\MediaStatus;
 use App\Enums\MediaVariantType;
 use App\Models\MediaAsset;
 use App\Models\MediaVariant;
+use App\Services\Http\BoundedHttpFetcher;
 use App\Services\Media\Deduplication\MediaDuplicateDetectionService;
-use App\Services\Media\MediaDownloader;
 use App\Services\Media\Scoring\TelegramCompatibilityChecker;
 use App\Services\Media\Storage\MediaStorageService;
 
@@ -21,7 +21,7 @@ class VideoProcessingService
 {
     public function __construct(
         private readonly VideoDecisionService $decisionService,
-        private readonly MediaDownloader $downloader,
+        private readonly BoundedHttpFetcher $downloader,
         private readonly FfmpegService $ffmpeg,
         private readonly MediaStorageService $storage,
         private readonly MediaDuplicateDetectionService $duplicateDetection,

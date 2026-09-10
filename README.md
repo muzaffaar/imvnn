@@ -18,15 +18,34 @@ php artisan migrate
 Requires PostgreSQL (for `jsonb` columns), and `ffmpeg`/`ffprobe` on `PATH`
 (or set `FFMPEG_BINARY`/`FFPROBE_BINARY`) for video processing.
 
-## Running the pipeline
+## Adding news sources
 
-Dispatch `App\Jobs\Media\ExtractMediaJob::dispatch($newsItem->id)` once a
-`NewsItem` has `raw_html` (or an RSS/API payload) set. Everything downstream
-is queued automatically — see the pipeline diagram in
-`docs/MEDIA_ARCHITECTURE.md`. Run workers per queue pool, e.g.:
+**Paste your source links into [`config/news_sources.php`](config/news_sources.php)**
+(the `sources` array — see the examples commented out there), then run:
 
 ```
-php artisan queue:work --queue=media-extraction,media-download,image-analysis,media-optimization,media-selection
+php artisan news-sources:sync   # upserts config into the sources table, by slug
+php artisan news:fetch          # dispatches a fetch job for every active source
+```
+
+Each source is either `fetch_type: 'rss'` (a feed URL, polled directly) or
+`fetch_type: 'html_crawl'` (a page to scan for article links, each then
+fetched and parsed individually). Candidates are matched against
+`ai_keywords` in the same config file before a `NewsItem` is ever created —
+see `App\Services\News\AiRelevanceFilter`. `news:fetch` is also scheduled
+automatically every `fetch_interval_minutes` (see `routes/console.php`), so
+once sources are synced and workers are running, fetching happens on its own.
+
+## Running the pipeline
+
+News fetching (`FetchNewsSourceJob` → `ProcessNewsCandidateJob`) creates a
+`NewsItem` and automatically dispatches `App\Jobs\Media\ExtractMediaJob` for
+it — everything from there on is the media pipeline, queued automatically;
+see the pipeline diagram in `docs/MEDIA_ARCHITECTURE.md`. Run workers per
+queue pool, e.g.:
+
+```
+php artisan queue:work --queue=news-fetch,news-parse,media-extraction,media-download,image-analysis,media-optimization,media-selection
 php artisan queue:work --queue=video-processing          # isolated, keep separate
 php artisan queue:work --queue=telegram-publishing
 ```
