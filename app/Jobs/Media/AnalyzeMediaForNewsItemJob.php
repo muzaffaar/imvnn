@@ -59,6 +59,11 @@ class AnalyzeMediaForNewsItemJob implements ShouldQueue
 
         $eventMediaPool->syncFromNewsItem($newsItem->fresh('mediaAssets'));
 
+        // Marks this item as a publishing candidate — see
+        // PublishNextReadyNewsItemJob, which only ever selects from items
+        // where this is set.
+        $newsItem->update(['media_analysis_completed_at' => now()]);
+
         MediaProcessingLog::record(
             ProcessingStage::QualityAnalysis, ProcessingLogStatus::Succeeded,
             newsItemId: $newsItem->id,

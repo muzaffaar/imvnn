@@ -267,6 +267,56 @@ lets `MediaSelectionService` pick, say, an official press-kit photo attached
 to one article to illustrate a Telegram post actually generated from a
 different (text-only) article about the same event.
 
+## Publishing scheduler (`PublishNextReadyNewsItemJob`)
+
+Nothing in the pipeline auto-selects an article for publishing — that would
+mean the moment several good articles finish media analysis around the same
+time, they'd all get posted in a burst. Instead, one article at a time, at a
+random human-scale interval, per this requirement: *even with multiple good
+candidates ready, publish periodically, randomly, every 15 minutes to 2
+hours* — not all at once.
+
+`PublishNextReadyNewsItemJob` is a **self-perpetuating** job: each run picks
+at most one candidate, dispatches it, and — in a `finally` block, so this
+happens whether or not a candidate was found or the dispatch succeeded —
+reschedules itself with `->delay(now()->addSeconds(random_int(min, max)))`.
+Laravel's own job retry is deliberately disabled (`$tries = 1`) so a failed
+attempt can't spawn a second parallel chain; the `finally` reschedule is the
+only thing keeping it alive, by design.
+
+Started once per channel with `php artisan publishing:start {channel}`.
+Running it twice starts a second, independent chain — each claim is atomic
+(see below), so the only effect is posting roughly twice as often, never a
+duplicate post of the same article.
+
+**Eligibility** — a `NewsItem` is a candidate only once
+`media_analysis_completed_at` is set (by `AnalyzeMediaForNewsItemJob`, once
+the whole media pipeline for it has finished) and neither `publish_queued_at`
+nor `telegram_published_at` is set yet.
+
+**Ranking** — among eligible candidates, the one with the highest cached
+`quality_score` among its *ready* media wins (`withMax` on the `mediaAssets`
+relation, Postgres `NULLS LAST` so text-only-eligible articles with no
+scored media rank behind anything with media, not ahead of it), tie-broken
+by whichever finished analysis first.
+
+**Claiming** — `publish_queued_at` is set via a single conditional
+`UPDATE ... WHERE publish_queued_at IS NULL`, checking the affected row
+count. This is what makes concurrent scheduler runs (two chains, or a
+retry) safe: only one caller's `UPDATE` actually matches and returns a
+non-zero count, so only one of them proceeds to dispatch
+`SelectMediaForPublishingJob`. `telegram_published_at` is set later, by
+`PublishToTelegramJob`, once a post actually succeeds — an item that gets
+claimed but never successfully posts (e.g. `sendTextOnly` itself failing)
+stays claimed forever rather than being retried automatically, consistent
+with treating a total posting failure as something a human should look at,
+not paper over (see the fallback ladder below).
+
+**Cadence** is per-channel, read from `TelegramChannel.rules`
+(`min_publish_interval_minutes` / `max_publish_interval_minutes`, default
+15 / 120) — the same JSON blob that already holds `prefer_video`,
+`max_images`, etc., so tuning it needs no deploy.
+
 ## Publishing fallback ladder
 
 `PublishToTelegramJob::attempt`, in order:

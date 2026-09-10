@@ -54,9 +54,26 @@ queue pool, e.g.:
 php artisan queue:work --queue=news-fetch,news-parse,media-extraction,media-download,image-analysis,media-optimization,media-selection
 php artisan queue:work --queue=video-processing          # isolated, keep separate
 php artisan queue:work --queue=telegram-publishing
+php artisan schedule:work                                 # drives the periodic news:fetch
 ```
 
-To publish: `App\Jobs\Media\SelectMediaForPublishingJob::dispatch($newsItem->id, $telegramChannel->id)`.
+**If you edit any PHP file while these are running, restart them** —
+long-running `queue:work`/`schedule:work` processes cache code in memory
+and won't pick up changes until restarted.
+
+Create a `TelegramChannel` row (`chat_id`, and `rules` JSON for
+`min_quality_score`/`prefer_video`/etc.), then start its publishing
+scheduler **once**:
+
+```
+php artisan publishing:start {channel_id}
+```
+
+From then on it runs itself: it publishes the single best ready-and-unpublished
+article, waits a random 15–120 minutes (configurable per channel via
+`rules.min_publish_interval_minutes`/`max_publish_interval_minutes`), then
+checks again — forever, even with several good articles backlogged. See
+`docs/MEDIA_ARCHITECTURE.md` "Publishing scheduler".
 
 ---
 

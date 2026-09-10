@@ -8,6 +8,7 @@ use App\Enums\ProcessingLogStatus;
 use App\Enums\ProcessingStage;
 use App\Models\MediaAsset;
 use App\Models\MediaProcessingLog;
+use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\Telegram\TelegramApiException;
 use App\Services\Telegram\TelegramPublisher;
@@ -68,6 +69,12 @@ class PublishToTelegramJob implements ShouldQueue
         foreach ($result['published_asset_ids'] ?? [] as $id) {
             MediaAsset::whereKey($id)->update(['status' => MediaStatus::Published]);
         }
+
+        // Marks this item done for PublishNextReadyNewsItemJob's eligibility
+        // query — it was already excluded via publish_queued_at the moment it
+        // was selected, but this is what actually means "sent," including for
+        // any future per-article reporting.
+        NewsItem::whereKey($this->newsItemId)->update(['telegram_published_at' => now()]);
     }
 
     /** @return array{strategy: string, message_id: mixed, published_asset_ids: list<string>} */
