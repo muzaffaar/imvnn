@@ -338,6 +338,46 @@ Run at two points, because the signals arrive at different times:
 | `ExtractMediaJob` | URL, alt, markup/filename size | Avatar hosts and named paths, before a row is ever created |
 | `MediaSelectionService` | Probed dimensions | Unfamiliar avatar CDNs, via the small-square rule |
 
+### Where on the page an image may come from
+
+Three rules, because no single one works across the configured sources.
+
+**Everything below the article body is removed.** The "related posts" / "read
+next" strip directly under a story is the hardest case to judge one image at a
+time: those thumbnails are real photographs at real sizes with sensible alt
+text. Their *position* is the giveaway. `ArticleBodyLocator` finds the body, and
+every `<img>`, `<picture>`, `<video>` and `<iframe>` after it is dropped.
+
+**Nothing above the body is removed.** That asymmetry is measured, not cautious.
+A hero image sits *before* the body container about as often as inside it — in a
+page header, a `<picture>` block, or a sibling `<figure>` — on blog.google, the
+NVIDIA blog, Hugging Face and the AWS blog alike. Trimming the region above
+would discard the most important image on the page. Scoping *into* the body was
+tried first and is wrong for exactly that reason: on blog.google it left 2 of 4
+real images, and on the NVIDIA blog it dropped the hero and both charts.
+
+**The body is chosen by paragraph density, not by being the first `<article>`.**
+Related cards are themselves `<article>` elements on several sources — 34 of them
+on one Hugging Face page, 30 across three MIT pages — so the first match is
+often a teaser. Density (paragraph text per descendant element) separates prose
+from a card that holds a headline and a date. Two sources ship no `<article>` at
+all, and a page with no locatable body is left untrimmed, since with no anchor
+there is no "after".
+
+A fourth rule does the rest of the work and is not positional: an image wrapped
+in a link to a *different* page is a teaser for that page. See
+`linksToAnotherArticle`. On the NVIDIA blog the related cards sit *inside* the
+same `<article>` (its class is literally `post-with-sidebar`), so position
+cannot help there and the link rule is what removes them.
+
+> **The base URL for all of this must be the article's real URL.** It was
+> `canonical_url` — a deduplication key produced by `UrlNormalizer`, which
+> strips the scheme. Nothing relative could resolve against it, so relative
+> `<img src>` values were silently discarded and the link rule could never
+> resolve an href. That is how three other articles' hero images reached a
+> research.google post, and how every avatar on a Hugging Face page survived
+> extraction: all of them are linked with relative paths.
+
 `HtmlContentExtractor` also removes byline, contributor and comment containers
 by class or id before collecting anything. That list is deliberately narrow and
 limited to words that can only describe a person or a discussion: `related` and

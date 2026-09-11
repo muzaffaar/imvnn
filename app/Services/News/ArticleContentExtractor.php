@@ -14,6 +14,8 @@ use Carbon\CarbonImmutable;
  */
 class ArticleContentExtractor
 {
+    public function __construct(private readonly PublishDateParser $dates) {}
+
     public function extract(string $html): ParsedArticle
     {
         $dom = new \DOMDocument;
@@ -76,24 +78,45 @@ class ArticleContentExtractor
         return $h1 ? trim($h1) : null;
     }
 
+    /**
+     * Ordered by how authoritative the signal is, which is not the same as how
+     * easy it is to read.
+     *
+     * `<time datetime>` used to be consulted before JSON-LD, and that published
+     * a year-old article as today's news. Stability AI's pages carry the real
+     * date twice — `<meta itemprop="datePublished" content="2025-09-10T...">`
+     * and the same value in JSON-LD — alongside a Squarespace
+     * `<time datetime="Sep 10">` that omits the year entirely. The yearless
+     * `<time>` won, "Sep 10" parsed as the *current* year, and a post from
+     * September 2025 was published in September 2026.
+     *
+     * So every machine-readable, year-bearing source is consulted before
+     * `<time>`, and `<time>` before the visible-text scan.
+     */
     private function extractPublishedAt(\DOMXPath $xpath, ?string $title = null, ?CarbonImmutable $jsonLdPublishedAt = null): ?CarbonImmutable
     {
-        $metaNames = ['article:published_time', 'og:article:published_time', 'publish-date', 'publishdate', 'date'];
+        $metaNames = [
+            'article:published_time', 'og:article:published_time',
+            'datePublished', 'publish-date', 'publishdate', 'date',
+        ];
 
         foreach ($metaNames as $name) {
-            $value = $xpath->query("//meta[@property=\"{$name}\" or @name=\"{$name}\"]/@content")->item(0)?->nodeValue;
+            // itemprop as well as property/name: schema.org microdata is how
+            // Squarespace and several other platforms expose the real date.
+            $value = $xpath->query("//meta[@property=\"{$name}\" or @name=\"{$name}\" or @itemprop=\"{$name}\"]/@content")->item(0)?->nodeValue;
             if ($value && $parsed = $this->tryParseDate($value)) {
                 return $parsed;
             }
         }
 
-        $timeDatetime = $xpath->query('//time/@datetime')->item(0)?->nodeValue;
-        if ($timeDatetime && $parsed = $this->tryParseDate($timeDatetime)) {
-            return $parsed;
-        }
-
         if ($jsonLdPublishedAt) {
             return $jsonLdPublishedAt;
+        }
+
+        foreach ($xpath->query('//time/@datetime') as $datetime) {
+            if ($parsed = $this->tryParseDate((string) $datetime->nodeValue)) {
+                return $parsed;
+            }
         }
 
         return $this->extractDateFromVisibleText($xpath, $title);
@@ -260,19 +283,6 @@ class ArticleContentExtractor
 
     private function tryParseDate(string $value): ?CarbonImmutable
     {
-        try {
-            $parsed = CarbonImmutable::parse(trim($value));
-        } catch (\Throwable) {
-            return null;
-        }
-
-        // Guards the plain-text fallback especially: a stray number sequence
-        // can parse into something absurd, and a bogus date is worse than no
-        // date once a freshness filter depends on it.
-        if ($parsed->year < 2000 || $parsed->isAfter(CarbonImmutable::now()->addDays(2))) {
-            return null;
-        }
-
-        return $parsed;
+        return $this->dates->parse($value);
     }
 }

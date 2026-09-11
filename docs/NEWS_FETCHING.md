@@ -360,6 +360,36 @@ Enforced at two points, which answer different questions:
    This also keeps the backlog count honest, since that count drives the
    posting cadence.
 
+### Date extraction is the weakest link, and a wrong date is worse than none
+
+The whole policy rests on one value, so how it is derived matters more than the
+filter itself. Sources are consulted in order of **authority**, not
+readability:
+
+1. Year-bearing meta tags — `article:published_time`, and `datePublished` in
+   any of `property`, `name` or `itemprop` (schema.org microdata is how
+   Squarespace and others expose the real date).
+2. JSON-LD `datePublished` / `dateCreated`.
+3. `<time datetime>`.
+4. Visible text near the headline.
+
+**Any date that does not state a 4-digit year is refused.** This is the single
+most important guard here. `CarbonImmutable::parse('Sep 10')` returns 10
+September of the *current* year, which converts an undated fragment into a
+confidently recent timestamp — the one failure a freshness filter cannot catch,
+because the date it receives already looks fresh.
+
+That is not hypothetical. Stability AI ships
+`<time class="dt-published" datetime="Sep 10">` with no year, and it was read
+before the JSON-LD on the same page that stated `2025-09-10T14:07:07+0000`. A
+post from September 2025 was published to the channel in September 2026.
+Relative phrasings ("2 days ago", "yesterday") are refused for the same reason:
+they are meaningful only against a page-render time we do not have.
+
+`PublishToTelegramJob` also re-checks freshness immediately before sending. The
+scheduler's verdict does not expire, and a retry backoff, a rate-limit release
+or a backlog draining past midnight can put hours between the two checks.
+
 **An article with no determinable date is not fresh.** That's a deliberate
 bias toward silence: an unknown date is far more often an old article than a
 new one, and posting a stale item is the whole failure this policy exists to

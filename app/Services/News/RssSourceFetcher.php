@@ -19,7 +19,10 @@ use SimpleXMLElement;
  */
 class RssSourceFetcher implements NewsSourceFetcherInterface
 {
-    public function __construct(private readonly BoundedHttpFetcher $fetcher) {}
+    public function __construct(
+        private readonly BoundedHttpFetcher $fetcher,
+        private readonly PublishDateParser $dates,
+    ) {}
 
     public function supports(Source $source): bool
     {
@@ -252,17 +255,18 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
         return $enclosures;
     }
 
+    /**
+     * Feed dates go through the same guard as HTML dates, via PublishDateParser.
+     *
+     * A well-formed RSS `pubDate` is RFC 2822 and always states its year, so
+     * this looked safe — but it is the primary freshness signal for most of the
+     * configured sources, and it previously had neither the year requirement nor
+     * any sanity bound. A feed emitting a yearless or malformed date would have
+     * had it resolved against the current year and waved straight through.
+     */
     private function parseDate(string $value): ?CarbonImmutable
     {
-        if ($value === '') {
-            return null;
-        }
-
-        try {
-            return CarbonImmutable::parse($value);
-        } catch (\Throwable) {
-            return null;
-        }
+        return $this->dates->parse($value);
     }
 
     private function clean(string $value): ?string

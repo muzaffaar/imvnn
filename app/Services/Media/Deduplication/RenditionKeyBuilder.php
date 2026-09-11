@@ -45,6 +45,66 @@ class RenditionKeyBuilder
         '/[-_](thumb|thumbnail|small|medium|large|scaled|preview|resized)$/i',
     ];
 
+    /**
+     * Minimum shared prefix before a truncation match is even considered.
+     * Short stems are not distinctive enough to collapse on.
+     */
+    private const MIN_TRUNCATION_PREFIX = 12;
+
+    /**
+     * Whether two keys name the same picture, allowing for a filename the CMS
+     * truncated differently per rendition.
+     *
+     * blog.google does exactly that, cutting the stem to a length that varies
+     * with the rendition suffix:
+     *
+     *   LOVE_RENDERED_HERO_BLOG_SANS_LOG.width-2200.format-webp.webp
+     *   LOVE_RENDERED_HERO_BLOG_SANS_LO.max-600x600.format-webp.webp
+     *
+     * One image, two stems differing by a single character, so exact key
+     * equality keeps both and the album shows the same picture twice.
+     *
+     * A plain prefix test would be wrong, and the counter-example is on the same
+     * site: `love_rendered_inline` is a prefix of `love_rendered_inline_2`, and
+     * those are two different pictures. The distinction is *where* the shorter
+     * stem stops. A truncation cuts mid-word — `…sans_lo` continues into `g`,
+     * `…usage_f` into `o` — whereas a numbered sibling stops at a separator.
+     * So a prefix only counts as a truncation when the next character of the
+     * longer stem is not a separator.
+     */
+    public function isSamePicture(string $first, string $second): bool
+    {
+        if ($first === $second) {
+            return true;
+        }
+
+        // Only URL-derived keys can be truncated. A content or perceptual hash
+        // is exact, and a provider id is authoritative.
+        if (! str_starts_with($first, 'url:') || ! str_starts_with($second, 'url:')) {
+            return false;
+        }
+
+        [$shorter, $longer] = mb_strlen($first) <= mb_strlen($second) ? [$first, $second] : [$second, $first];
+
+        if (! str_starts_with($longer, $shorter)) {
+            return false;
+        }
+
+        if (mb_strlen($shorter) - mb_strlen('url:') < self::MIN_TRUNCATION_PREFIX) {
+            return false;
+        }
+
+        $nextCharacter = mb_substr($longer, mb_strlen($shorter), 1);
+        $lastCharacter = mb_substr($shorter, -1);
+
+        return ! $this->isSeparator($nextCharacter) && ! $this->isSeparator($lastCharacter);
+    }
+
+    private function isSeparator(string $character): bool
+    {
+        return $character === '' || in_array($character, ['-', '_', '.', '/', '|'], true);
+    }
+
     public function keyFor(MediaAsset $asset): string
     {
         // When we actually hold the bytes, exact/perceptual identity beats

@@ -117,6 +117,78 @@ class ImageFilteringTest extends TestCase
         }
     }
 
+    public function test_a_filename_truncated_per_rendition_still_collapses(): void
+    {
+        $keys = app(RenditionKeyBuilder::class);
+        $base = 'https://storage.googleapis.com/gweb-uniblog-publish-prod/images/';
+
+        // blog.google cuts the stem to a length that varies with the rendition
+        // suffix, so one image yields two stems differing by a single character.
+        $this->assertTrue($keys->isSamePicture(
+            $keys->keyFor($this->asset($base.'LOVE_RENDERED_HERO_BLOG_SANS_LOG.width-2200.format-webp.webp')),
+            $keys->keyFor($this->asset($base.'LOVE_RENDERED_HERO_BLOG_SANS_LO.max-600x600.format-webp.webp')),
+        ));
+        $this->assertTrue($keys->isSamePicture(
+            $keys->keyFor($this->asset($base.'Detailed_share_of_Gemini_usage_for_civic_task.width-1300.png')),
+            $keys->keyFor($this->asset($base.'Detailed_share_of_Gemini_usage_f.width-2000.format-webp.webp')),
+        ));
+    }
+
+    public function test_a_numbered_sibling_is_not_mistaken_for_a_truncation(): void
+    {
+        $keys = app(RenditionKeyBuilder::class);
+        $base = 'https://storage.googleapis.com/gweb-uniblog-publish-prod/images/';
+
+        // `love_rendered_inline` is a prefix of `love_rendered_inline_2`, and
+        // they are two different pictures from the same article. A truncation
+        // cuts mid-word; a numbered sibling stops at a separator.
+        $this->assertFalse($keys->isSamePicture(
+            $keys->keyFor($this->asset($base.'love_rendered_inline.width-2000.format-webp.webp')),
+            $keys->keyFor($this->asset($base.'love_rendered_inline_2.width-2000.format-webp.webp')),
+        ));
+    }
+
+    public function test_distinct_figures_sharing_a_long_prefix_stay_distinct(): void
+    {
+        $keys = app(RenditionKeyBuilder::class);
+        $base = 'https://blogs.nvidia.com/wp-content/uploads/2026/09/';
+
+        $this->assertFalse($keys->isSamePicture(
+            $keys->keyFor($this->asset($base.'robotaxi-momentum-vla-chart.jpeg')),
+            $keys->keyFor($this->asset($base.'robotaxi-momentum-synthetic-data-chart.jpeg')),
+        ));
+    }
+
+    public function test_truncation_matching_never_applies_to_content_hashes(): void
+    {
+        // A hash is exact. Fuzzy-matching one would merge genuinely different
+        // images whose hashes happen to share a prefix.
+        $keys = app(RenditionKeyBuilder::class);
+        $a = $this->asset('https://example.com/a.jpg');
+        $b = $this->asset('https://example.com/b.jpg');
+        $a->content_hash = str_repeat('a', 63).'1';
+        $b->content_hash = str_repeat('a', 63).'2';
+
+        $this->assertFalse($keys->isSamePicture($keys->keyFor($a), $keys->keyFor($b)));
+    }
+
+    public function test_a_truncated_rendition_does_not_take_a_second_album_slot(): void
+    {
+        $this->neverProbe();
+        $base = 'https://storage.googleapis.com/gweb-uniblog-publish-prod/images/';
+        $news = $this->newsWith([
+            $this->asset($base.'LOVE_RENDERED_HERO_BLOG_SANS_LOG.width-2200.format-webp.webp', null, 2200, 1238),
+            $this->asset($base.'LOVE_RENDERED_HERO_BLOG_SANS_LO.max-600x600.format-webp.webp', null, 600, 600),
+            $this->asset($base.'love_rendered_inline.width-2000.format-webp.webp', null, 2000, 1125),
+            $this->asset($base.'love_rendered_inline_2.width-2000.format-webp.webp', null, 2000, 1125),
+        ]);
+
+        $plan = app(MediaSelectionService::class)->selectForNewsItem($news, $this->channel());
+
+        // Three distinct pictures: the hero plus two different inline images.
+        $this->assertCount(3, $plan->assets);
+    }
+
     public function test_one_picture_never_takes_two_album_slots(): void
     {
         $this->neverProbe();
@@ -238,6 +310,86 @@ class ImageFilteringTest extends TestCase
             .'<a href="mailto:x@example.com"><img src="https://example.com/figures/b.jpg" alt="B"></a></article>';
 
         $this->assertCount(2, $this->extract($html));
+    }
+
+    public function test_the_related_posts_strip_below_the_article_is_dropped(): void
+    {
+        // Thumbnails in a "read next" strip are pictures of other articles. They
+        // are the hardest kind to recognise individually — real photographs at
+        // real sizes with sensible alt text — so position is the signal. One
+        // blog.google page contributed six of them.
+        $html = '<body><article><p>'.str_repeat('Body prose about the story. ', 12).'</p>'
+            .'<img src="https://example.com/figures/figure.jpg" alt="A figure"></article>'
+            .'<section><h2>Read next</h2>'
+            .'<img src="https://example.com/cards/other-one.jpg" alt="Another story">'
+            .'<img src="https://example.com/cards/other-two.jpg" alt="A third story">'
+            .'</section></body>';
+
+        $this->assertSame(['https://example.com/figures/figure.jpg'], $this->extract($html));
+    }
+
+    public function test_a_hero_above_the_article_body_is_kept(): void
+    {
+        // Measured across the configured sources, the hero sits *before* the
+        // body container as often as inside it — in a page header, a <picture>
+        // block, or a sibling <figure>. Trimming above the body would throw
+        // away the single most important image on the page, which is why only
+        // what follows it is removed.
+        $html = '<body><header><img src="https://example.com/figures/hero.jpg" alt="Hero"></header>'
+            .'<article><p>'.str_repeat('Body prose about the story. ', 12).'</p>'
+            .'<img src="https://example.com/figures/figure.jpg" alt="A figure"></article></body>';
+
+        $urls = $this->extract($html);
+        $this->assertContains('https://example.com/figures/hero.jpg', $urls);
+        $this->assertContains('https://example.com/figures/figure.jpg', $urls);
+    }
+
+    public function test_a_page_with_no_locatable_body_is_left_alone(): void
+    {
+        // With no anchor there is no "after", so nothing is trimmed rather than
+        // everything. Two of the configured sources ship no <article> tag at all.
+        $html = '<body><div><img src="https://example.com/a.jpg" alt="A">'
+            .'<img src="https://example.com/b.jpg" alt="B"></div></body>';
+
+        $this->assertCount(2, $this->extract($html));
+    }
+
+    public function test_the_densest_article_wins_over_a_teaser_card_marked_up_as_an_article(): void
+    {
+        // Related cards are themselves <article> elements on several sources —
+        // 34 of them on one Hugging Face page — so "the first <article>" can
+        // land on a card and trim the real story away as if it came after.
+        $html = '<body><article class="card"><h3>A teaser</h3></article>'
+            .'<article class="post"><p>'.str_repeat('Body prose about the story. ', 12).'</p>'
+            .'<img src="https://example.com/figures/figure.jpg" alt="A figure"></article></body>';
+
+        $this->assertSame(['https://example.com/figures/figure.jpg'], $this->extract($html));
+    }
+
+    public function test_a_relative_image_path_resolves_against_the_article_url(): void
+    {
+        // The extraction base URL used to be `canonical_url`, a deduplication
+        // key with the scheme stripped. Nothing relative could resolve against
+        // it, so relative image paths were silently discarded entirely.
+        $html = '<body><article><p>'.str_repeat('Body prose about the story. ', 12).'</p>'
+            .'<img src="/media/figure.jpg" alt="A figure"></article></body>';
+
+        $this->assertSame(['https://example.com/media/figure.jpg'], $this->extract($html));
+    }
+
+    public function test_a_relatively_linked_teaser_is_recognised(): void
+    {
+        // Same root cause: with an unresolvable base, the "links to another
+        // article" check could never resolve an href, so every card linked with
+        // a relative path went through. That is how three other articles'
+        // heroes reached a research.google post.
+        $html = '<body><article><p>'.str_repeat('Body prose about the story. ', 12).'</p>'
+            .'<img src="/media/figure.jpg" alt="A figure">'
+            .'<div class="related-posts"><a href="/blog/some-other-story/">'
+            .'<img src="/media/other-hero.jpg" alt="Another story"></a></div>'
+            .'</article></body>';
+
+        $this->assertSame(['https://example.com/media/figure.jpg'], $this->extract($html));
     }
 
     public function test_a_lazy_loaded_image_is_taken_over_its_placeholder(): void

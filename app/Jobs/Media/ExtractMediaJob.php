@@ -59,7 +59,14 @@ class ExtractMediaJob implements ShouldQueue
 
         $context = new ExtractionContext(
             newsItemId: $newsItem->id,
-            baseUrl: $newsItem->canonical_url ?: $newsItem->url,
+            // The ARTICLE URL, not the canonical one. `canonical_url` is a
+            // deduplication key produced by UrlNormalizer, which strips the
+            // scheme — so using it here left every relative URL on the page
+            // unresolvable. Relative `<img src>` values were silently dropped,
+            // and the "is this a link to another article" check could never
+            // resolve an href, so related-post thumbnails sailed through on
+            // every source that links with a relative path.
+            baseUrl: $newsItem->url ?: $newsItem->canonical_url,
             title: $newsItem->title,
             html: $newsItem->raw_html,
             rssItem: data_get($newsItem->source_payload, 'rss_item'),

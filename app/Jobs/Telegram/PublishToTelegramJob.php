@@ -10,6 +10,7 @@ use App\Models\MediaAsset;
 use App\Models\MediaProcessingLog;
 use App\Models\NewsItem;
 use App\Models\TelegramChannel;
+use App\Services\News\FreshnessPolicy;
 use App\Services\Telegram\TelegramApiException;
 use App\Services\Telegram\TelegramPublisher;
 use App\Support\Observability\PipelineLogger;
@@ -64,6 +65,33 @@ class PublishToTelegramJob implements ShouldQueue
                 'telegram_channel_id' => $channel->id,
                 'news_item_id' => $this->newsItemId,
                 'reason' => 'channel_inactive',
+            ]);
+
+            return;
+        }
+
+        // Last gate before the send, and the only one that sees the clock at
+        // the moment of publication. The scheduler already filters on
+        // freshness, but minutes or hours can pass between its check and this
+        // job — a retry backoff, a rate-limit release, a backlog drained after
+        // midnight — and the scheduler's verdict does not expire. A year-old
+        // Stability AI article reaching the channel is what makes a second
+        // query worth it: one stale post does more damage than one missed post.
+        $newsItem = NewsItem::find($this->newsItemId);
+
+        if (! $newsItem || ! app(FreshnessPolicy::class)->isFresh($newsItem->published_at)) {
+            // Release the scheduler's claim rather than holding it: the article
+            // is not coming back, and a dangling claim hides that from anyone
+            // reading the table.
+            NewsItem::whereKey($this->newsItemId)
+                ->whereNull('telegram_published_at')
+                ->update(['publish_queued_at' => null]);
+
+            PipelineLogger::warning('telegram.publish_skipped', [
+                'telegram_channel_id' => $channel->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => $newsItem ? 'not_fresh_at_send_time' : 'news_item_missing',
+                'published_at' => $newsItem?->published_at?->toIso8601String(),
             ]);
 
             return;

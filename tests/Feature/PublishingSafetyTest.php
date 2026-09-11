@@ -23,10 +23,84 @@ class PublishingSafetyTest extends TestCase
     private function publication(): array
     {
         $source = Source::create(['name' => 'Test', 'slug' => 'test', 'base_url' => 'https://example.com', 'type' => 'rss']);
-        $news = NewsItem::create(['source_id' => $source->id, 'title' => 'News', 'url' => 'https://example.com/story']);
+        // Dated today: PublishToTelegramJob re-checks freshness immediately
+        // before sending, and ingestion never creates an undated item anyway.
+        $news = NewsItem::create(['source_id' => $source->id, 'title' => 'News', 'url' => 'https://example.com/story', 'published_at' => now()]);
         $channel = TelegramChannel::create(['name' => 'Test', 'chat_id' => '@test', 'is_active' => true]);
 
         return [$news, new PublishToTelegramJob($channel->id, $news->id, PostMediaType::None, [], 'Caption', null)];
+    }
+
+    private function publicationDated(?string $publishedAt): array
+    {
+        [$news, $job] = $this->publication();
+        NewsItem::whereKey($news->id)->update(['published_at' => $publishedAt]);
+
+        return [$news->refresh(), $job];
+    }
+
+    public function test_an_article_whose_day_has_passed_is_not_sent(): void
+    {
+        // The scheduler's freshness check does not expire, and minutes or hours
+        // can pass before this job runs — a retry backoff, a rate-limit
+        // release, a backlog draining past midnight.
+        [$news, $job] = $this->publicationDated(now()->subDays(3)->toDateTimeString());
+        $publisher = $this->mock(TelegramPublisher::class);
+        $publisher->shouldNotReceive('sendTextOnly');
+
+        $job->handle($publisher);
+
+        $this->assertNull($news->fresh()->telegram_published_at);
+    }
+
+    public function test_a_year_old_article_is_not_sent(): void
+    {
+        // The Stability AI post: published 10 September 2025, reached the
+        // channel on 11 September 2026 because a yearless `<time datetime>`
+        // had been parsed as the current year.
+        [$news, $job] = $this->publicationDated(now()->subYear()->toDateTimeString());
+        $publisher = $this->mock(TelegramPublisher::class);
+        $publisher->shouldNotReceive('sendTextOnly');
+
+        $job->handle($publisher);
+
+        $this->assertNull($news->fresh()->telegram_published_at);
+    }
+
+    public function test_an_undated_article_is_not_sent(): void
+    {
+        [$news, $job] = $this->publicationDated(null);
+        $publisher = $this->mock(TelegramPublisher::class);
+        $publisher->shouldNotReceive('sendTextOnly');
+
+        $job->handle($publisher);
+
+        $this->assertNull($news->fresh()->telegram_published_at);
+    }
+
+    public function test_a_stale_article_releases_its_scheduler_claim(): void
+    {
+        // A dangling claim would hide from the table that the article is never
+        // coming back.
+        [$news, $job] = $this->publicationDated(now()->subDays(3)->toDateTimeString());
+        NewsItem::whereKey($news->id)->update(['publish_queued_at' => now()]);
+        $publisher = $this->mock(TelegramPublisher::class);
+        $publisher->shouldNotReceive('sendTextOnly');
+
+        $job->handle($publisher);
+
+        $this->assertNull($news->fresh()->publish_queued_at);
+    }
+
+    public function test_todays_article_is_still_sent(): void
+    {
+        [$news, $job] = $this->publicationDated(now()->toDateTimeString());
+        $publisher = $this->mock(TelegramPublisher::class);
+        $publisher->shouldReceive('sendTextOnly')->once()->andReturn(['message_id' => 7]);
+
+        $job->handle($publisher);
+
+        $this->assertNotNull($news->fresh()->telegram_published_at);
     }
 
     public function test_redelivery_does_not_publish_twice(): void

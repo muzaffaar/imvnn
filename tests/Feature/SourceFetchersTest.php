@@ -16,6 +16,7 @@ use App\Services\News\FreshnessPolicy;
 use App\Services\News\HtmlCrawlSourceFetcher;
 use App\Services\News\NewsIngestionService;
 use App\Services\News\NewsSourceFetcherManager;
+use App\Services\News\PublishDateParser;
 use App\Services\News\RssSourceFetcher;
 use App\Services\News\TopicPolicy;
 use Carbon\CarbonImmutable;
@@ -99,7 +100,7 @@ class SourceFetchersTest extends TestCase
                     <enclosure url="https://cdn.example.test/two.mp4" type="video/mp4" />
                 </item></channel></rss>
                 XML),
-        ], $history));
+        ], $history), new PublishDateParser);
 
         $candidates = $fetcher->fetch($source);
 
@@ -115,7 +116,7 @@ class SourceFetchersTest extends TestCase
         $notModifiedHistory = [];
         $notModifiedFetcher = new RssSourceFetcher($this->boundedFetcher([
             new Response(304),
-        ], $notModifiedHistory));
+        ], $notModifiedHistory), new PublishDateParser);
 
         $this->assertCount(0, $notModifiedFetcher->fetch($source));
         $request = $notModifiedHistory[0]['request'];
@@ -181,7 +182,7 @@ class SourceFetchersTest extends TestCase
 
         $service = new NewsIngestionService(
             $this->boundedFetcher([new Response(403)]),
-            new ArticleContentExtractor,
+            app(ArticleContentExtractor::class),
             $analyzer,
             new AiRelevanceFilter(new TopicPolicy),
             new UrlNormalizer,

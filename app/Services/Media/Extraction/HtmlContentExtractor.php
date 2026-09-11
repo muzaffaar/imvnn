@@ -5,6 +5,7 @@ namespace App\Services\Media\Extraction;
 use App\DTOs\ExtractedMedia;
 use App\DTOs\ExtractionContext;
 use App\Enums\MediaType;
+use App\Services\News\ArticleBodyLocator;
 use Illuminate\Support\Collection;
 
 /**
@@ -14,6 +15,8 @@ use Illuminate\Support\Collection;
 class HtmlContentExtractor implements MediaExtractorInterface
 {
     use ResolvesUrls;
+
+    public function __construct(private readonly ArticleBodyLocator $bodyLocator) {}
 
     public function supports(ExtractionContext $context): bool
     {
@@ -35,6 +38,8 @@ class HtmlContentExtractor implements MediaExtractorInterface
         foreach (iterator_to_array($xpath->query($this->nonArticleContainerQuery())) as $node) {
             $node->parentNode?->removeChild($node);
         }
+
+        $this->dropEverythingBelowTheArticle($xpath);
 
         $results = collect();
         $position = 0;
@@ -178,6 +183,73 @@ class HtmlContentExtractor implements MediaExtractorInterface
         }
 
         return null;
+    }
+
+    /**
+     * Removes the part of the page that comes *after* the article body — the
+     * "related posts", "read next" and "more from us" strip sitting directly
+     * below the story.
+     *
+     * Those thumbnails are pictures of other articles, and they were reaching
+     * published albums: one blog.google page contributed six of them. They are
+     * also the hardest kind to recognise one at a time, since they are real
+     * photographs at real sizes with sensible alt text. Their position is the
+     * giveaway.
+     *
+     * Only what follows the body is removed, never what precedes it, and that
+     * asymmetry is deliberate and measured. A hero image very often sits
+     * *before* the body container — in a page header, a `<picture>` block, or a
+     * sibling `<figure>` — so dropping the region above the article would throw
+     * away the single most important image on the page. Nothing above is
+     * dropped here; the role classifier and the teaser-link rule handle the
+     * navigation icons and promo panels that live up there.
+     *
+     * Scoping *into* the body instead of trimming after it was tried first and
+     * is wrong for the same reason: measured across the configured sources, the
+     * hero and sometimes the article's own charts fall outside the densest
+     * container on blog.google, the NVIDIA blog, Hugging Face and the AWS blog.
+     *
+     * A page whose body cannot be located is left entirely alone, since with no
+     * anchor there is no "after".
+     */
+    private function dropEverythingBelowTheArticle(\DOMXPath $xpath): void
+    {
+        $body = $this->bodyLocator->locate($xpath);
+
+        if (! $body) {
+            return;
+        }
+
+        $order = new \SplObjectStorage;
+        $index = 0;
+
+        foreach ($xpath->query('//*') ?: [] as $element) {
+            $order[$element] = $index++;
+        }
+
+        if (! $order->contains($body)) {
+            return;
+        }
+
+        $lastIndexInBody = $order[$body];
+        foreach ($body->getElementsByTagName('*') as $descendant) {
+            if ($order->contains($descendant)) {
+                $lastIndexInBody = max($lastIndexInBody, $order[$descendant]);
+            }
+        }
+
+        // Collect first, remove after: detaching a node mid-iteration would
+        // shift the live NodeList out from under the loop.
+        $doomed = [];
+        foreach ($xpath->query('//img | //picture | //video | //iframe') ?: [] as $media) {
+            if ($order->contains($media) && $order[$media] > $lastIndexInBody) {
+                $doomed[] = $media;
+            }
+        }
+
+        foreach ($doomed as $media) {
+            $media->parentNode?->removeChild($media);
+        }
     }
 
     /** @return \DOMNode[] */

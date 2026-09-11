@@ -12,7 +12,7 @@ class ArticleExtractionTest extends TestCase
     public function test_lazy_original_is_selected_and_sidebar_media_is_excluded(): void
     {
         $html = '<article><img src="placeholder.jpg" data-src="original.jpg" data-srcset="small.jpg 200w, large.jpg 1600w"><aside><img src="advert.jpg"></aside></article>';
-        $media = (new HtmlContentExtractor)->extract(new ExtractionContext('test', 'https://example.com/story', html: $html));
+        $media = app(HtmlContentExtractor::class)->extract(new ExtractionContext('test', 'https://example.com/story', html: $html));
         $this->assertCount(1, $media);
         $this->assertSame('https://example.com/large.jpg', $media->first()->url);
     }
@@ -21,13 +21,13 @@ class ArticleExtractionTest extends TestCase
     {
         $body = 'The researchers published the results of their latest artificial intelligence study.';
         $garbage = 'Subscribe to our newsletter for exciting offers and unrelated daily promotions.';
-        $article = (new ArticleContentExtractor)->extract('<article><p>'.$body.'</p><aside><p>'.$garbage.'</p></aside></article>');
+        $article = app(ArticleContentExtractor::class)->extract('<article><p>'.$body.'</p><aside><p>'.$garbage.'</p></aside></article>');
         $this->assertSame($body, $article->content);
     }
 
     public function test_json_ld_publish_date_is_used_when_meta_and_time_are_absent(): void
     {
-        $article = (new ArticleContentExtractor)->extract(<<<'HTML'
+        $article = app(ArticleContentExtractor::class)->extract(<<<'HTML'
             <script type="application/ld+json">
                 {"@context":"https://schema.org","@type":"NewsArticle","datePublished":"2026-09-10T12:00:00Z"}
             </script>

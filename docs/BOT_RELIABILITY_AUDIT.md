@@ -18,6 +18,77 @@ Reviewed ingestion, article parsing, media extraction/ranking, caption compositi
 - Link previews: disable automatic previews for text posts.
 - Freshness boundary: scheduler excludes the following day's exact midnight, matching ingestion.
 
+## Images from the related-posts strip below the article
+
+Posts were carrying pictures of *other* articles, taken from the "read next"
+strip under the story.
+
+The root cause turned out to be one line, and its blast radius was wider than
+the symptom. `ExtractMediaJob` passed `canonical_url` as the extraction base
+URL. That column is a deduplication key produced by `UrlNormalizer`, which
+strips the scheme, so it is not a resolvable URL at all. Consequences:
+
+- Every relative `<img src>` on every page failed to resolve and was silently
+  discarded — part of the original "it is not fetching all images" complaint.
+- The "is this image linked to another article" rule could never resolve an
+  href, so it passed everything on any source that links with a relative path.
+  That is how three other articles' hero images reached a research.google post,
+  and how a page full of Hugging Face contributor avatars survived extraction.
+
+Position filtering was added on top: everything below the article body is
+removed, the body being located by paragraph density rather than by taking the
+first `<article>` (related cards are `<article>` elements too — 34 on one page).
+
+Nothing *above* the body is removed, and that was measured rather than assumed.
+Scoping extraction into the body container, the obvious reading of the bug
+report, is wrong: across the configured sources the hero and sometimes the
+article's own charts fall outside the densest container. On blog.google it left
+2 of 4 real images; on the NVIDIA blog it dropped the hero and both charts.
+
+Effect across the 56 stored articles: 4.3 publishable images per article, above
+the 4-slot album cap, with no article left with nothing to post. Covered by
+`tests/Feature/ImageFilteringTest.php`, which pins the hero-above-body and
+no-locatable-body cases alongside the related-strip ones.
+
+## A year-old article published as today's news
+
+A Stability AI post from **10 September 2025** was published to the channel on
+**11 September 2026**. Root cause, in two parts:
+
+**Carbon fills a missing year in with the current one.** `CarbonImmutable::parse('Sep 10')`
+returns 10 September of *this* year. Stability AI's pages carry a Squarespace
+`<time class="dt-published" datetime="Sep 10">` with no year at all, so the
+article's date was manufactured as 2026-09-10 — yesterday. This is the one
+failure mode a freshness filter is powerless against: the date it is handed
+already looks fresh, so every downstream check passes.
+
+`tryParseDate()` now refuses any value that does not state a 4-digit year
+outright, which also covers relative phrasings ("2 days ago", "yesterday") that
+are only meaningful against a render time we do not have. An undated article is
+not fresh and gets dropped, which is the intended outcome: a missing date costs
+one article, an invented one costs the channel's credibility.
+
+**The wrong source was consulted first.** The same page carries the true date
+twice — `<meta itemprop="datePublished" content="2025-09-10T14:07:07+0000">` and
+the identical value in JSON-LD — but `<time>` was read before JSON-LD, and the
+meta scan matched only `property` and `name`, never `itemprop`, so schema.org
+microdata was invisible. Order is now by authority: year-bearing meta tags
+(including `itemprop`), then JSON-LD, then `<time>`, then visible text.
+
+**A second gate was added at send time.** `PublishToTelegramJob` re-checks
+freshness immediately before calling Telegram. The scheduler's check does not
+expire, and a retry backoff, a rate-limit release, or a backlog draining past
+midnight can put hours between the two. One stale post does more damage than one
+missed post.
+
+Auditing every stored article against a re-parse found exactly one corrupted
+record — the one that was posted. Its `published_at` has been corrected to
+2025-09-10, so it cannot be selected again. The Telegram message itself is still
+in the channel.
+
+Covered by `tests/Unit/ArticleDateExtractionTest.php` and the freshness cases in
+`tests/Feature/PublishingSafetyTest.php`.
+
 ## Wrong and duplicated images in published posts
 
 Two defects were visible in published albums.
@@ -109,7 +180,7 @@ Items with `telegram_publish_started_at IS NOT NULL` and `telegram_published_at 
 - Publishing state is global to a news item, not per channel. Independent delivery of each story to several channels requires a publication ledger keyed by channel and news item.
 - Scheduler tokens are not consumed per execution; duplicate executions with the same token can still fork a scheduler chain. Individual item claims prevent duplicate articles, but channel cadence is not guaranteed at actual send time.
 - AI prompts request factual summaries, but no independent factual verifier checks names, numbers, quotations or translation accuracy. Script validation alone cannot establish language correctness. Humor and tone remain configurable existing policy.
-- Article date fallback can still mistake a visible event/update date for publication time; canonical links and redirects are not reconciled with publisher-declared article identity.
+- Article date fallback can still mistake a visible event/update date for publication time; canonical links and redirects are not reconciled with publisher-declared article identity. Yearless and relative dates are now refused outright rather than resolved against the current year, so the remaining risk is a *wrong* stated date rather than an invented one.
 - Media selection is heuristic and probing is bounded to twelve distinct pictures per article. Image *role* (content vs avatar/chrome/pixel/promo) is now classified explicitly, but semantic relevance, watermark detection, near-duplicate reference images and best-HD-video discovery are still not guaranteed. The role classifier is pattern- and geometry-based: an avatar that is large, non-square and served from an article CDN would still pass, and only a vision model would catch it.
 - Source names are already included by the caption header; article attribution links and Telegram buttons remain absent by existing design.
 

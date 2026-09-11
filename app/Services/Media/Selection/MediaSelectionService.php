@@ -180,20 +180,51 @@ class MediaSelectionService
      */
     private function dropDuplicateRenditions(Collection $ranked): Collection
     {
-        return $ranked
-            ->unique(fn (MediaAsset $asset) => $this->renditionKeys->keyFor($asset))
+        return $this->renditionGroups($ranked)
+            ->map(fn (Collection $group) => $group->first())
             ->values();
     }
 
     /**
      * Rank-ordered groups of renditions of the same picture.
      *
+     * Grouped with `isSamePicture` rather than by exact key, because a CMS can
+     * truncate one image's filename differently per rendition — so two keys
+     * that differ by a character still name one picture. A plain `groupBy` kept
+     * both and the album showed it twice.
+     *
      * @param  Collection<int, MediaAsset>  $ranked
-     * @return Collection<string, Collection<int, MediaAsset>>
+     * @return Collection<int, Collection<int, MediaAsset>>
      */
     private function renditionGroups(Collection $ranked): Collection
     {
-        return $ranked->groupBy(fn (MediaAsset $asset) => $this->renditionKeys->keyFor($asset));
+        /** @var list<array{key: string, assets: Collection<int, MediaAsset>}> $groups */
+        $groups = [];
+
+        foreach ($ranked as $asset) {
+            $key = $this->renditionKeys->keyFor($asset);
+            $matched = false;
+
+            foreach ($groups as $index => $group) {
+                if ($this->renditionKeys->isSamePicture($group['key'], $key)) {
+                    $groups[$index]['assets']->push($asset);
+                    // Keep the shorter key as the group's identity: a truncation
+                    // of a truncation still matches the shortest stem, while the
+                    // longest would stop matching further truncations.
+                    if (mb_strlen($key) < mb_strlen($group['key'])) {
+                        $groups[$index]['key'] = $key;
+                    }
+                    $matched = true;
+                    break;
+                }
+            }
+
+            if (! $matched) {
+                $groups[] = ['key' => $key, 'assets' => collect([$asset])];
+            }
+        }
+
+        return collect($groups)->map(fn (array $group) => $group['assets'])->values();
     }
 
     /**
@@ -213,7 +244,7 @@ class MediaSelectionService
     {
         return $this->renditionGroups($ranked)
             ->take(self::PROBE_CANDIDATES)
-            ->flatten()
+            ->flatten(1)
             ->take(self::PROBE_REQUEST_CAP)
             ->values();
     }
