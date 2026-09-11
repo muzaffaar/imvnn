@@ -42,20 +42,25 @@ class PublishDateParser
             return null;
         }
 
-        // Normalised to UTC before it leaves here, because Eloquent binds a
-        // DateTimeInterface to SQL by formatting it as-is, WITHOUT converting
-        // the timezone. A date carrying an offset was therefore stored as its
-        // local wall-clock reading: the AWS blog publishes with `-08:00`, so
-        // `2026-09-10T13:58:09-08:00` — really 21:58 UTC, and comfortably
-        // inside the current Tashkent day — was saved as `13:58:09` and read
-        // back eight hours early, which put it outside the freshness window.
+        // Converted into the timezone the application stores timestamps in,
+        // because Eloquent binds a DateTimeInterface to SQL by formatting it
+        // as-is, WITHOUT converting the zone. Whatever offset a publisher used
+        // would otherwise be stored as its local wall-clock reading: the AWS
+        // blog publishes with `-08:00`, so `2026-09-10T13:58:09-08:00` — really
+        // 21:58 UTC, and early on the 11th in Tashkent — was saved as
+        // `13:58:09` and read back hours early, outside the freshness window.
         // Today's news was silently dropped.
         //
         // The error runs both ways: a `+05:00` timestamp stored as-is reads
         // five hours LATE, which can carry yesterday's article into today.
-        // FreshnessPolicy already converts its window boundaries to UTC for
-        // exactly this reason; this is the other half of that pairing.
-        return $parsed->utc();
+        // FreshnessPolicy converts its window boundaries into the same zone, so
+        // both halves of every comparison agree.
+        return $parsed->setTimezone($this->storageTimezone());
+    }
+
+    private function storageTimezone(): string
+    {
+        return (string) config('app.timezone', 'UTC');
     }
 
     /**

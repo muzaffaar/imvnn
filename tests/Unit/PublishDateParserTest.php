@@ -71,23 +71,27 @@ class PublishDateParserTest extends TestCase
         $this->assertSame('2026-09-11', $this->parse('11 September 2026'));
     }
 
-    public function test_an_offset_date_is_normalised_to_utc(): void
+    public function test_an_offset_date_is_converted_not_stripped(): void
     {
         // Eloquent binds a DateTimeInterface by formatting it as-is, without
-        // converting the timezone, so anything not already UTC was stored as
-        // its local wall-clock reading. The AWS blog publishes with `-08:00`:
-        // this timestamp is really 21:58 UTC and was being saved as 13:58,
-        // eight hours early, which pushed today's news out of the window.
+        // converting the timezone, so a date in any other zone was stored as its
+        // own wall-clock reading. The AWS blog publishes with `-08:00`: this
+        // timestamp is really 21:58 UTC and was being saved as 13:58, eight
+        // hours early, which pushed today's news out of the window.
+        config(['app.timezone' => 'UTC']);
+
         $parsed = app(PublishDateParser::class)->parse('2026-09-10T13:58:09-08:00');
 
         $this->assertSame('UTC', $parsed->tzName);
         $this->assertSame('2026-09-10 21:58:09', $parsed->toDateTimeString());
     }
 
-    public function test_a_positive_offset_is_also_normalised(): void
+    public function test_a_positive_offset_is_also_converted(): void
     {
         // The error runs both ways: stored as-is, this would read five hours
         // late and could carry yesterday's article into today.
+        config(['app.timezone' => 'UTC']);
+
         $parsed = app(PublishDateParser::class)->parse('2026-09-11T02:00:00+05:00');
 
         $this->assertSame('2026-09-10 21:00:00', $parsed->toDateTimeString());
@@ -105,10 +109,35 @@ class PublishDateParserTest extends TestCase
         $parser = app(PublishDateParser::class);
         $policy = app(\App\Services\News\FreshnessPolicy::class);
 
+        config(['app.timezone' => 'UTC']);
         $published = now('UTC')->startOfDay()->addHours(3);
         $asOffsetString = $published->copy()->setTimezone('-08:00')->toIso8601String();
 
         $this->assertTrue($policy->isFresh($parser->parse($asOffsetString)));
+    }
+
+    public function test_dates_are_converted_into_the_storage_timezone(): void
+    {
+        // Timestamps are stored in the application timezone, so the parser has to
+        // hand back that zone: Eloquent formats a DateTimeInterface as-is, so a
+        // value in any other zone is written as its own wall clock and read back
+        // hours out.
+        config(['app.timezone' => 'Asia/Tashkent']);
+
+        $parsed = app(PublishDateParser::class)->parse('2026-09-10T21:58:09+00:00');
+
+        $this->assertSame('Asia/Tashkent', $parsed->tzName);
+        $this->assertSame('2026-09-11 02:58:09', $parsed->toDateTimeString());
+    }
+
+    public function test_the_storage_timezone_is_followed_rather_than_hard_coded(): void
+    {
+        config(['app.timezone' => 'UTC']);
+
+        $parsed = app(PublishDateParser::class)->parse('2026-09-11T02:58:09+05:00');
+
+        $this->assertSame('UTC', $parsed->tzName);
+        $this->assertSame('2026-09-10 21:58:09', $parsed->toDateTimeString());
     }
 
     public function test_absurdly_old_dates_are_refused(): void

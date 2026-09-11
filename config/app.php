@@ -60,12 +60,26 @@ return [
     |--------------------------------------------------------------------------
     |
     | Here you may specify the default timezone for your application, which
-    | will be used by the PHP date and date-time functions. The timezone
-    | is set to "UTC" by default as it is suitable for most use cases.
+    | will be used by the PHP date and date-time functions.
+    |
+    | This is the timezone every timestamp is STORED in, because Eloquent binds
+    | a DateTimeInterface to SQL by formatting it as-is without converting the
+    | zone. It is deliberately the audience's timezone rather than UTC: this
+    | application's whole job is "today's news, on the day the readers are
+    | living in", so storing that day's wall clock keeps the database legible
+    | and keeps the freshness comparison in one zone end to end.
+    |
+    | Safe here specifically because Asia/Tashkent is a fixed UTC+05:00 with no
+    | daylight saving (abolished in 1996), so local time never repeats or skips
+    | an hour. Do NOT point this at a DST zone without revisiting
+    | App\Services\News\FreshnessPolicy and App\Services\News\PublishDateParser.
+    |
+    | Keep it in step with NEWS_DAY_TIMEZONE, which decides which calendar day
+    | an article belongs to.
     |
     */
 
-    'timezone' => 'UTC',
+    'timezone' => env('APP_TIMEZONE', 'UTC'),
 
     /*
     |--------------------------------------------------------------------------

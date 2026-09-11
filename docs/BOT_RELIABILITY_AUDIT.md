@@ -18,6 +18,45 @@ Reviewed ingestion, article parsing, media extraction/ranking, caption compositi
 - Link previews: disable automatic previews for text posts.
 - Freshness boundary: scheduler excludes the following day's exact midnight, matching ingestion.
 
+## Articles resent after the articles table was rebuilt
+
+`news_items.telegram_published_at` was the only record of a delivery, and it
+answers a narrower question than it appears to: not "has this article been
+sent" but "has *this row* been sent". It dies with the row. Re-syncing sources,
+clearing stale articles, or re-ingesting after a reset all produce fresh rows
+with an empty publish history, and the scheduler posts them again. Three
+articles already in the channel went out a second time that way.
+
+`published_posts` is now the durable answer, keyed on `(telegram_channel_id,
+canonical_url)` with a unique index on a digest of the URL. The canonical URL is
+the right key because it is what identifies an article across ingestions — the
+same value `news_items.canonical_url` is already uniquely indexed on.
+
+Checked in two places, for two different reasons:
+
+- `PublishToTelegramJob`, immediately before sending. This is the strict guard.
+  It also stamps the new row's `telegram_published_at` so the article stops
+  being reconsidered.
+- `PublishNextReadyNewsItemJob::eligibleQuery`, so the backlog count that drives
+  the posting cadence does not include articles that can never be sent.
+
+The row is written straight after a confirmed delivery and before any of the
+remaining bookkeeping, because losing it means the article can go out again. The
+write is idempotent: a duplicate key is swallowed rather than thrown, since
+throwing there would push the job into a retry that could publish twice — the
+exact failure the table exists to prevent.
+
+The creating migration backfills from `news_items.telegram_published_at` so an
+existing installation does not start with an empty ledger and repost its day.
+Publishing state in `news_items` is global rather than per channel, so the
+backfill attributes each sent article to every channel: exact for one channel,
+and deliberately conservative for several, since suppressing a post that a
+second channel never received beats sending a duplicate.
+
+**This does not survive `migrate:fresh`**, which drops the ledger along with
+everything else. Nothing stored in the database can. Treat that command as
+"repost today's news" and prefer clearing `news_items` alone.
+
 ## Today's news dropped because the timezone offset was discarded
 
 The mirror image of the stale-post bug, found while verifying it.
@@ -196,7 +235,7 @@ Items with `telegram_publish_started_at IS NOT NULL` and `telegram_published_at 
 ## Remaining gaps
 
 - Cross-source semantic story deduplication and minor-update clustering are absent from ingestion; canonical URL uniqueness only catches URL-equivalent articles. Event relationships exist, but ingestion does not assign stories to events.
-- Publishing state is global to a news item, not per channel. Independent delivery of each story to several channels requires a publication ledger keyed by channel and news item.
+- Publishing state in `news_items` is still global to the article rather than per channel, so a second channel cannot independently deliver a story the first has already sent. The `published_posts` ledger is keyed per channel and is the foundation for fixing this, but the `telegram_published_at` flag the scheduler reads is not.
 - Scheduler tokens are not consumed per execution; duplicate executions with the same token can still fork a scheduler chain. Individual item claims prevent duplicate articles, but channel cadence is not guaranteed at actual send time.
 - AI prompts request factual summaries, but no independent factual verifier checks names, numbers, quotations or translation accuracy. Script validation alone cannot establish language correctness. Humor and tone remain configurable existing policy.
 - Article date fallback can still mistake a visible event/update date for publication time; canonical links and redirects are not reconciled with publisher-declared article identity. Yearless and relative dates are now refused outright rather than resolved against the current year, so the remaining risk is a *wrong* stated date rather than an invented one.

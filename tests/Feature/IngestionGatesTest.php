@@ -95,6 +95,41 @@ class IngestionGatesTest extends TestCase
         }
     }
 
+    public function test_the_day_window_is_expressed_in_the_storage_timezone(): void
+    {
+        // Both halves of the comparison must share a zone, because Eloquent
+        // binds a boundary as-is. A window in the wrong zone does not fail, it
+        // silently slides by the offset.
+        config([
+            'app.timezone' => 'Asia/Tashkent',
+            'news_sources.freshness.only_today' => true,
+            'news_sources.freshness.max_age_hours' => null,
+            'news_sources.freshness.timezone' => 'Asia/Tashkent',
+        ]);
+        $policy = new FreshnessPolicy;
+
+        $this->assertSame('Asia/Tashkent', $policy->windowStart()->tzName);
+        $this->assertSame('00:00:00', $policy->windowStart()->format('H:i:s'));
+        $this->assertSame('00:00:00', $policy->windowEnd()->format('H:i:s'));
+        $this->assertSame(24, (int) $policy->windowStart()->diffInHours($policy->windowEnd()));
+    }
+
+    public function test_an_article_published_early_in_the_audience_day_is_fresh(): void
+    {
+        // The case the old UTC boundary discarded: the first hours of the
+        // Tashkent day fell before a UTC-midnight window start.
+        config([
+            'app.timezone' => 'Asia/Tashkent',
+            'news_sources.freshness.only_today' => true,
+            'news_sources.freshness.max_age_hours' => null,
+            'news_sources.freshness.timezone' => 'Asia/Tashkent',
+        ]);
+
+        $earlyToday = CarbonImmutable::now('Asia/Tashkent')->startOfDay()->addHours(2);
+
+        $this->assertTrue((new FreshnessPolicy)->isFresh($earlyToday));
+    }
+
     public function test_freshness_can_be_switched_off_entirely(): void
     {
         config([

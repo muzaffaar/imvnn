@@ -32,10 +32,13 @@ Then start the workers (see [Running the pipeline](#running-the-pipeline)).
 Requires PostgreSQL (for `jsonb` columns), and `ffmpeg`/`ffprobe` on `PATH`
 (or set `FFMPEG_BINARY`/`FFPROBE_BINARY`) for video processing.
 
-> **`migrate:fresh` erases publish history.** `telegram_published_at` is
-> what stops an article being posted twice, so anything already posted
-> *today* becomes eligible again and will repost. Older articles are
-> unaffected — the freshness filter blocks them regardless.
+> **`migrate:fresh` erases publish history.** What stops an article being
+> posted twice is the `published_posts` ledger, keyed by the article's
+> canonical URL per channel — so rebuilding `news_items` alone is now safe,
+> but `migrate:fresh` drops the ledger too and anything already posted
+> *today* becomes eligible again. Older articles are unaffected: the
+> freshness filter blocks them regardless. No database table can survive
+> `migrate:fresh`, so treat it as "repost today's news".
 
 ## Adding news sources
 
@@ -118,6 +121,20 @@ php artisan publishing:start 1 --min-interval=5 --max-interval=5 --min-priority=
 Re-running the command is how the cadence is changed: it mints a new chain
 token, so any chain already running retires itself on its next pass instead of
 posting alongside the new one.
+
+## Timezone
+
+Every timestamp is **stored** in `APP_TIMEZONE`, which is set to
+`Asia/Tashkent` rather than UTC so the database reads in the same clock the
+audience lives in and the freshness comparison never straddles two zones.
+Keep it equal to `NEWS_DAY_TIMEZONE`.
+
+This works because Asia/Tashkent is a fixed UTC+05:00 with no daylight saving.
+Pointing `APP_TIMEZONE` at a DST zone needs
+[`FreshnessPolicy`](app/Services/News/FreshnessPolicy.php) and
+[`PublishDateParser`](app/Services/News/PublishDateParser.php) revisited first,
+and the one-off migration that shifted existing rows applies a single constant
+offset that a DST zone would make wrong.
 
 ## Development mode: catch everything, post often
 

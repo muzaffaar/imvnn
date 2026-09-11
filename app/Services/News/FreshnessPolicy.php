@@ -46,6 +46,20 @@ class FreshnessPolicy
     }
 
     /**
+     * The timezone timestamps are written to and read back from. Both halves of
+     * every freshness comparison must be in it: Eloquent binds a
+     * DateTimeInterface by formatting it as-is, without converting the zone, so
+     * a boundary in the wrong zone silently shifts the window rather than
+     * failing. When storage was UTC and these boundaries were +05:00, the
+     * comparison discarded everything published in the first five hours of each
+     * Tashkent day.
+     */
+    private function storageTimezone(): string
+    {
+        return (string) config('app.timezone', 'UTC');
+    }
+
+    /**
      * Rolling lookback in hours, or null when the calendar-day policy applies.
      * A configured value of zero or less means "not set" rather than "nothing
      * is ever fresh", so an empty or malformed env value can never silence
@@ -78,7 +92,8 @@ class FreshnessPolicy
     }
 
     /**
-     * Start of today in the audience timezone, returned **in UTC**.
+     * Start of today in the audience timezone, returned in the timezone the
+     * application STORES timestamps in (`app.timezone`).
      *
      * The conversion is load-bearing, not cosmetic: Eloquent binds a
      * DateTimeInterface to SQL by formatting it as-is, without converting
@@ -90,10 +105,10 @@ class FreshnessPolicy
     public function windowStart(): CarbonImmutable
     {
         if ($hours = $this->maxAgeHours()) {
-            return CarbonImmutable::now('UTC')->subHours($hours);
+            return CarbonImmutable::now($this->storageTimezone())->subHours($hours);
         }
 
-        return CarbonImmutable::now($this->timezone())->startOfDay()->utc();
+        return CarbonImmutable::now($this->timezone())->startOfDay()->setTimezone($this->storageTimezone());
     }
 
     /**
@@ -106,9 +121,10 @@ class FreshnessPolicy
     public function windowEnd(): CarbonImmutable
     {
         if ($this->maxAgeHours()) {
-            return CarbonImmutable::now('UTC')->addHour();
+            return CarbonImmutable::now($this->storageTimezone())->addHour();
         }
 
-        return CarbonImmutable::now($this->timezone())->startOfDay()->utc()->addDay();
+        return CarbonImmutable::now($this->timezone())->startOfDay()
+            ->setTimezone($this->storageTimezone())->addDay();
     }
 }

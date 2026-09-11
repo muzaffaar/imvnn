@@ -129,6 +129,19 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
             ->whereNull('publish_queued_at')
             ->whereNull('telegram_published_at');
 
+        // Exclude anything this channel has already sent, judged by the
+        // article's canonical URL rather than by this row's own history. A
+        // re-ingested article is a brand new row with `telegram_published_at`
+        // empty, so the three checks above cannot see that it is already in the
+        // channel. Applied here as well as in PublishToTelegramJob so the
+        // backlog count — which drives the posting cadence — stays honest.
+        $query->whereNotExists(function ($sub) {
+            $sub->selectRaw(1)
+                ->from('published_posts')
+                ->where('published_posts.telegram_channel_id', $this->telegramChannelId)
+                ->whereColumn('published_posts.canonical_url', 'news_items.canonical_url');
+        });
+
         // Only today's news, and only today — an article whose day has passed
         // is abandoned rather than carried over, so the channel never wakes up
         // to yesterday's headlines. This also keeps the backlog count honest,

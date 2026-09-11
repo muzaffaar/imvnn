@@ -9,6 +9,7 @@ use App\Enums\ProcessingStage;
 use App\Models\MediaAsset;
 use App\Models\MediaProcessingLog;
 use App\Models\NewsItem;
+use App\Models\PublishedPost;
 use App\Models\TelegramChannel;
 use App\Services\News\FreshnessPolicy;
 use App\Services\Telegram\TelegramApiException;
@@ -78,6 +79,25 @@ class PublishToTelegramJob implements ShouldQueue
         // Stability AI article reaching the channel is what makes a second
         // query worth it: one stale post does more damage than one missed post.
         $newsItem = NewsItem::find($this->newsItemId);
+
+        // Durable "already sent" check, keyed on the article rather than on this
+        // row. `telegram_published_at` dies with the row it lives on, so a
+        // re-ingested article arrives looking unsent — which is how three
+        // articles already in the channel were posted a second time.
+        if ($newsItem && PublishedPost::alreadySent($channel->id, $newsItem->canonical_url)) {
+            NewsItem::whereKey($this->newsItemId)
+                ->whereNull('telegram_published_at')
+                ->update(['telegram_published_at' => now(), 'publish_queued_at' => null]);
+
+            PipelineLogger::warning('telegram.publish_skipped', [
+                'telegram_channel_id' => $channel->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => 'already_sent_to_channel',
+                'canonical_url' => PipelineLogger::url($newsItem->canonical_url),
+            ]);
+
+            return;
+        }
 
         if (! $newsItem || ! app(FreshnessPolicy::class)->isFresh($newsItem->published_at)) {
             // Release the scheduler's claim rather than holding it: the article
@@ -156,6 +176,20 @@ class PublishToTelegramJob implements ShouldQueue
         }
 
         NewsItem::whereKey($this->newsItemId)->update(['telegram_published_at' => now()]);
+
+        // Written immediately after a confirmed delivery, and before anything
+        // that could fail: everything below is bookkeeping, whereas losing this
+        // row means the article can be sent again.
+        if (filled($newsItem->canonical_url)) {
+            PublishedPost::record(
+                telegramChannelId: $channel->id,
+                canonicalUrl: $newsItem->canonical_url,
+                newsItemId: $newsItem->id,
+                title: $newsItem->title,
+                telegramMessageId: $result['message_id'] ?? null,
+                articlePublishedAt: $newsItem->published_at,
+            );
+        }
 
         MediaProcessingLog::record(
             ProcessingStage::Publishing, ProcessingLogStatus::Succeeded,
