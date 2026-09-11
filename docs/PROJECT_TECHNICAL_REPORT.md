@@ -143,8 +143,9 @@ budget, or evaluation corpus exists.
 AiCaptionComposer sends stored title, content capped at 4,000 chars, and media
 type. It requests Uzbek Latin-script headline/body in short, ordinary language
 and 2–4 lowercase hashtags; no humor field is requested. PostHeader appends a
-validated direct original-article link and intentionally omits publication date
-and time. It validates script/length, escapes HTML, and fits 1,024 Telegram
+validated direct original-article link, placed immediately before hashtags, and
+intentionally omits the source name, publication date, and time. It falls back
+to `url` when `canonical_url` is malformed, validates script/length, escapes HTML, and fits 1,024 Telegram
 caption chars. Defaults: temperature 0.7, 400 output tokens, 20 seconds.
 
 FallbackCaptionComposer only uses PlainCaptionComposer after LLM failure when
@@ -237,7 +238,7 @@ immediately and relaunch would continually mint chains. The supplied Supervisor
 file correctly has no bootstrap program.
 
 The scheduler has one try and reschedules in finally. Token comparison retires
-old chains. Default baseline is 120 minutes; backlog delay is random from 15
+old chains. Default baseline is 30 minutes; backlog delay is random from 15
 minutes to a decreasing ceiling, saturated at five items.
 
 SelectMediaForPublishingJob queues PublishToTelegramJob (4 tries; 15/60/300/900).

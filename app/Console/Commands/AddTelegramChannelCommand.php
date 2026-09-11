@@ -23,7 +23,7 @@ class AddTelegramChannelCommand extends Command
         {chat : @username or numeric chat id of the channel}
         {--name= : Override the channel name (defaults to its Telegram title)}
         {--min-interval=15 : Minimum minutes between posts when a backlog exists}
-        {--max-interval=120 : Baseline minutes between posts}
+        {--max-interval=30 : Baseline minutes between posts}
         {--max-images=4 : Maximum images in a media group}';
 
     protected $description = 'Register the Telegram channel to publish into, verifying bot access';

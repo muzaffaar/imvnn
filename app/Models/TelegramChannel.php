@@ -33,10 +33,10 @@ class TelegramChannel extends Model
     public static function defaultRules(array $overrides = []): array
     {
         return array_replace([
-            // Baseline 2h between posts, dropping toward 15 min as a backlog
+            // Baseline 30m between posts, dropping toward 15 min as a backlog
             // builds — see PublishNextReadyNewsItemJob.
             'min_publish_interval_minutes' => 15,
-            'max_publish_interval_minutes' => 120,
+            'max_publish_interval_minutes' => 30,
             'publish_backlog_saturation_count' => 5,
 
             'max_images' => 4,

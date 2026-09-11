@@ -200,6 +200,21 @@ The source-specific Meta command uses the same job, fetcher, and HTML crawler
 as the queue worker. It updates `sources.last_fetched_at` and queues any
 discovered candidates for `news-parse`; it is not a curl-only check.
 
+After deploying the publishing-cadence migration, mint one current scheduler
+token for each active channel. Older delayed jobs may still be visible in the
+database, but their token is stale: they retire without posting or scheduling
+another job when picked up. Do not run `publishing:start` repeatedly.
+
+```bash
+php artisan publishing:start 1
+tail -f storage/logs/laravel.log | grep -E 'telegram\.scheduler_(started|stale_chain_retired|rescheduled)'
+```
+
+The expected live state is one current chain per channel. `jobs` may briefly
+contain older delayed rows after a restart; they are not active chains and are
+safe to let the queue consume. Investigate if `scheduler_candidate_queued`
+appears from two different chain tokens for the same channel.
+
 Inspect the expected post-fetch state:
 
 ```bash

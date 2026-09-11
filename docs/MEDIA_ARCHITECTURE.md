@@ -294,8 +294,8 @@ different (text-only) article about the same event.
 Nothing in the pipeline auto-selects an article for publishing — that would
 mean the moment several good articles finish media analysis around the same
 time, they'd all get posted in a burst. Instead, one article at a time, per
-this requirement: *post every 2 hours normally; if more good news is ready,
-post faster — randomly, between 15 minutes and 2 hours — scaled by how much
+this requirement: *post every 30 minutes normally; if more good news is ready,
+post faster — randomly, between 15 and 30 minutes — scaled by how much
 is waiting*, not all at once regardless of backlog size.
 
 `PublishNextReadyNewsItemJob` is a **self-perpetuating** job: each run picks
@@ -327,11 +327,12 @@ scheduler.
 the whole media pipeline for it has finished) and neither `publish_queued_at`
 nor `telegram_published_at` is set yet.
 
-**Ranking** — among eligible candidates, the one with the highest cached
-`quality_score` among its *ready* media wins (`withMax` on the `mediaAssets`
-relation, Postgres `NULLS LAST` so text-only-eligible articles with no
-scored media rank behind anything with media, not ahead of it), tie-broken
-by whichever finished analysis first.
+**Ranking** — among eligible candidates, transparent high-impact signals from
+`NewsPriorityScorer` rank urgent updates, breakthroughs, launches, safety,
+policy, and material business news first. Ready-media `quality_score` is the
+tie-breaker (`withMax` on `mediaAssets`; null ranks after usable media), then
+whichever finished analysis first. The channel's `min_news_priority_score`
+default of `0.20` filters routine updates.
 
 **Claiming** — `publish_queued_at` is set via a single conditional
 `UPDATE ... WHERE publish_queued_at IS NULL`, checking the affected row
@@ -350,10 +351,10 @@ blob that already holds `prefer_video`, `max_images`, etc., so tuning needs
 no deploy) via `computeDelaySeconds()`:
 
 - **No other candidate waiting** (`backlogCount == 0`): the delay is exactly
-  `max_publish_interval_minutes` (default 120 = 2h) — a steady drip when
+  `max_publish_interval_minutes` (default 30 minutes) — a steady drip when
   supply is scarce, not randomized, since there's nothing to rush for.
 - **Backlog present**: the delay is random between `min_publish_interval_minutes`
-  (default 15) and a ceiling that shrinks from the 2h baseline down toward
+  (default 15) and a ceiling that shrinks from the 30-minute baseline down toward
   15 minutes as the backlog grows, reaching the 15-minute floor once the
   backlog hits `publish_backlog_saturation_count` (default 5) — i.e. the
   more good news is queued up, the faster (and still randomly-timed) it
@@ -364,13 +365,11 @@ no deploy) via `computeDelaySeconds()`:
 
 ## Post format and length budget
 
-A post is assembled from a bold source line, the article's publish time in
-the channel's timezone (`media.telegram_caption.display_timezone`, default
-`Asia/Tashkent`), a bold headline plus 2-3 sentence summary per language,
-and 2-4 topical hashtags — no links of any kind, since the post is meant to
-stand on its own rather than tease a click. `PostHeader` renders the shared
-source/time/hashtag pieces so the AI and plain composers can't drift
-apart in appearance.
+A post is assembled from a bold headline, one blank line, a 2-3 sentence
+summary, then a mandatory direct article link on its own line immediately
+before 2-4 lowercase topical hashtags. Source names and publication timestamps
+are intentionally omitted. `PostHeader` validates the canonical URL and falls
+back to the original article URL when canonicalization is malformed.
 
 Languages come from `media.telegram_caption.languages` (currently Uzbek,
 Latin script) rather than being hardcoded: that list drives the AI-provider

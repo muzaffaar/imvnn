@@ -37,7 +37,8 @@ class CaptionBudget
 
     /**
      * Shrinks in order of what's least missed: hashtags, then the humour
-     * line, then the section bodies.
+     * line, then the section bodies. The article link is required and stays
+     * immediately before hashtags at the bottom of every post.
      *
      * The humour line is passed separately rather than appended to a body on
      * purpose — it carries its own <i> markup, and a body-level truncation
@@ -51,13 +52,14 @@ class CaptionBudget
         ?string $header,
         array $sections,
         ?string $humorLine,
+        string $articleLink,
         ?string $hashtags,
         int $limit,
     ): string {
         $budget = $limit - self::SAFETY_MARGIN;
 
         foreach ([[$humorLine, $hashtags], [$humorLine, null], [null, null]] as [$humor, $tags]) {
-            $candidate = self::join($header, $sections, $humor, $tags);
+            $candidate = self::join($header, $sections, $humor, $articleLink, $tags);
 
             if (self::visibleLength($candidate) <= $budget) {
                 return $candidate;
@@ -66,7 +68,7 @@ class CaptionBudget
 
         // Then give each section an equal share of whatever the fixed parts
         // (header, flags, titles) leave behind.
-        $overhead = self::visibleLength(self::join($header, self::withEmptyBodies($sections), null, null));
+        $overhead = self::visibleLength(self::join($header, self::withEmptyBodies($sections), null, $articleLink, null));
         $perSection = (int) floor(max(0, $budget - $overhead) / max(1, count($sections)));
 
         $trimmed = array_map(
@@ -74,29 +76,27 @@ class CaptionBudget
             $sections,
         );
 
-        $result = self::join($header, $trimmed, null, null);
+        $result = self::join($header, $trimmed, null, $articleLink, null);
 
         // Degenerate case: titles alone blow the budget — drop them too.
         if (self::visibleLength($result) > $budget) {
             $result = self::join($header, array_map(
                 fn (array $section) => [...$section, 'title' => null],
                 $trimmed,
-            ), null, null);
+            ), null, $articleLink, null);
         }
 
         if (self::visibleLength($result) > $budget) {
-            // Even an unusually long source/header must fit. Flatten markup
-            // only in this pathological case, then escape after truncation.
-            $result = self::truncateAtWord(TelegramHtml::escape(
-                html_entity_decode(strip_tags($result), ENT_QUOTES | ENT_HTML5, 'UTF-8')
-            ), $budget);
+            // Preserve the mandatory article link even if malformed upstream
+            // title/body data consumes the entire caption budget.
+            $result = $articleLink;
         }
 
         return $result;
     }
 
     /** @param list<array{flag?: string, title?: ?string, body: string}> $sections */
-    private static function join(?string $header, array $sections, ?string $humorLine, ?string $hashtags): string
+    private static function join(?string $header, array $sections, ?string $humorLine, string $articleLink, ?string $hashtags): string
     {
         $parts = [$header];
 
@@ -108,7 +108,9 @@ class CaptionBudget
             $block = trim(
                 ($flag ? $flag.' ' : '')
                 .($title ? "<b>{$title}</b>" : '')
-                .(($title && $body !== '') ? "\n" : '')
+                // Keep one visibly empty row between the bold title and the
+                // summary, matching the channel's requested reading rhythm.
+                .(($title && $body !== '') ? "\n\n" : '')
                 .$body
             );
 
@@ -116,6 +118,7 @@ class CaptionBudget
         }
 
         $parts[] = $humorLine;
+        $parts[] = $articleLink;
         $parts[] = $hashtags;
 
         return implode("\n\n", array_filter($parts, fn (?string $p) => $p !== null && $p !== ''));

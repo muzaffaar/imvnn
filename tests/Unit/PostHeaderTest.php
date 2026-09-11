@@ -9,20 +9,20 @@ use PHPUnit\Framework\TestCase;
 
 class PostHeaderTest extends TestCase
 {
-    public function test_header_has_a_safe_source_link_but_no_publication_timestamp(): void
+    public function test_article_link_falls_back_to_the_original_url_when_canonical_url_is_invalid(): void
     {
         $item = new NewsItem([
             'id' => 'article-1',
+            'canonical_url' => 'example.test/articles/1',
             'url' => 'https://example.test/articles/1?campaign=telegram&safe=yes',
         ]);
         $item->setRelation('source', new Source(['name' => 'Example source']));
 
-        $header = PostHeader::render($item);
+        $link = PostHeader::renderArticleLink($item);
 
-        $this->assertStringContainsString('📰 <b>Example source</b>', $header);
-        $this->assertStringContainsString('href="https://example.test/articles/1?campaign=telegram&amp;safe=yes"', $header);
-        $this->assertStringContainsString('>manba</a>', $header);
-        $this->assertStringNotContainsString('🕒', $header);
+        $this->assertNull(PostHeader::render($item));
+        $this->assertStringContainsString('href="https://example.test/articles/1?campaign=telegram&amp;safe=yes"', $link);
+        $this->assertStringContainsString('>manba</a>', $link);
     }
 
     public function test_hashtags_are_normalized_to_lowercase(): void

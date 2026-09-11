@@ -17,7 +17,7 @@ class StartPublishingSchedulerCommand extends Command
 {
     protected $signature = 'publishing:start {channel : TelegramChannel id}';
 
-    protected $description = 'Start the random-interval (15min-2h) publishing scheduler for a Telegram channel';
+    protected $description = 'Start the random-interval (15min-30min) publishing scheduler for a Telegram channel';
 
     public function handle(): int
     {
@@ -36,7 +36,7 @@ class StartPublishingSchedulerCommand extends Command
         PublishNextReadyNewsItemJob::startChain($channel);
 
         $min = $channel->rule('min_publish_interval_minutes', 15);
-        $max = $channel->rule('max_publish_interval_minutes', 120);
+        $max = $channel->rule('max_publish_interval_minutes', 30);
         $this->info("Publishing scheduler started for '{$channel->name}' ({$max} min baseline, down to {$min} min when a backlog builds up).");
         $this->line('Any previously running chain for this channel will retire on its next run.');
 

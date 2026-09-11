@@ -63,6 +63,7 @@ class AiCaptionComposer implements CaptionComposerInterface
             PostHeader::render($newsItem),
             $sections,
             null,
+            PostHeader::renderArticleLink($newsItem),
             PostHeader::renderHashtags($response['hashtags'] ?? []),
             CaptionBudget::limitFor($plan),
         );

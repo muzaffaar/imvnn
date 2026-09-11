@@ -39,7 +39,7 @@ use Illuminate\Support\Str;
  * is therefore safe and idempotent — it mints a new token, and every older
  * chain retires itself on its next run.
  *
- * Cadence: `max_publish_interval_minutes` (default 120 = 2h) is the
+ * Cadence: `max_publish_interval_minutes` (default 30 minutes) is the
  * baseline — with nothing else waiting, that's the wait before the next
  * check. With a backlog of other ready candidates, the wait becomes random
  * between `min_publish_interval_minutes` (default 15) and a ceiling that
@@ -198,7 +198,7 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
         }
 
         $minMinutes = (int) $channel->rule('min_publish_interval_minutes', 15);
-        $maxMinutes = (int) $channel->rule('max_publish_interval_minutes', 120);
+        $maxMinutes = (int) $channel->rule('max_publish_interval_minutes', 30);
         $backlogCount = $this->eligibleQuery()->count();
 
         $delaySeconds = $this->computeDelaySeconds($minMinutes, $maxMinutes, $backlogCount, $channel);
@@ -214,7 +214,7 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
     }
 
     /**
-     * No backlog: exactly the baseline (2h default) — a steady drip when
+     * No backlog: exactly the baseline (30m default) — a steady drip when
      * supply is scarce. With a backlog, the ceiling shrinks from the
      * baseline toward the floor as the backlog grows (fully saturated at
      * `publish_backlog_saturation_count` candidates), and the actual delay
