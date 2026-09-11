@@ -373,6 +373,15 @@ readability:
 3. `<time datetime>`.
 4. Visible text near the headline.
 
+**Every parsed date is normalised to UTC.** Eloquent binds a
+`DateTimeInterface` to SQL by formatting it as-is, without converting the
+timezone, so a date carrying an offset would be stored as its local wall-clock
+reading. The AWS blog publishes with `-08:00`: an article stamped 13:58 local is
+really 21:58 UTC, inside the current Tashkent day, and storing 13:58 put it
+eight hours early and outside the window — today's news, silently dropped. A
+`+05:00` source would err the other way and carry yesterday's article into
+today.
+
 **Any date that does not state a 4-digit year is refused.** This is the single
 most important guard here. `CarbonImmutable::parse('Sep 10')` returns 10
 September of the *current* year, which converts an undated fragment into a

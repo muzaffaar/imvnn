@@ -18,6 +18,25 @@ Reviewed ingestion, article parsing, media extraction/ranking, caption compositi
 - Link previews: disable automatic previews for text posts.
 - Freshness boundary: scheduler excludes the following day's exact midnight, matching ingestion.
 
+## Today's news dropped because the timezone offset was discarded
+
+The mirror image of the stale-post bug, found while verifying it.
+
+Eloquent binds a `DateTimeInterface` to SQL by formatting it as-is, *without*
+converting the timezone. `FreshnessPolicy` already accounts for that when it
+builds its window boundaries; the parsed article date did not. So any date
+carrying an offset was stored as its local wall-clock reading.
+
+The AWS Machine Learning blog publishes with `-08:00`. An article stamped
+`2026-09-10T13:58:09-08:00` is really 21:58 UTC, which is early on the 11th in
+Tashkent and therefore today's news. It was saved as `13:58:09` and read back
+eight hours early, landing outside the window. Three AWS articles were ingested
+and then sat permanently unpublishable.
+
+The error runs both ways: a `+05:00` timestamp stored as-is reads five hours
+late, which can carry yesterday's article into today. `PublishDateParser` now
+returns UTC, so both halves of the comparison are in the same zone.
+
 ## Images from the related-posts strip below the article
 
 Posts were carrying pictures of *other* articles, taken from the "read next"

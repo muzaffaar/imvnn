@@ -71,6 +71,46 @@ class PublishDateParserTest extends TestCase
         $this->assertSame('2026-09-11', $this->parse('11 September 2026'));
     }
 
+    public function test_an_offset_date_is_normalised_to_utc(): void
+    {
+        // Eloquent binds a DateTimeInterface by formatting it as-is, without
+        // converting the timezone, so anything not already UTC was stored as
+        // its local wall-clock reading. The AWS blog publishes with `-08:00`:
+        // this timestamp is really 21:58 UTC and was being saved as 13:58,
+        // eight hours early, which pushed today's news out of the window.
+        $parsed = app(PublishDateParser::class)->parse('2026-09-10T13:58:09-08:00');
+
+        $this->assertSame('UTC', $parsed->tzName);
+        $this->assertSame('2026-09-10 21:58:09', $parsed->toDateTimeString());
+    }
+
+    public function test_a_positive_offset_is_also_normalised(): void
+    {
+        // The error runs both ways: stored as-is, this would read five hours
+        // late and could carry yesterday's article into today.
+        $parsed = app(PublishDateParser::class)->parse('2026-09-11T02:00:00+05:00');
+
+        $this->assertSame('2026-09-10 21:00:00', $parsed->toDateTimeString());
+    }
+
+    public function test_an_offset_date_is_judged_fresh_on_the_audiences_day(): void
+    {
+        // The whole point of the normalisation: 21:58 UTC on the 10th is early
+        // on the 11th in Tashkent, so this is today's news and must publish.
+        config([
+            'news_sources.freshness.only_today' => true,
+            'news_sources.freshness.max_age_hours' => null,
+            'news_sources.freshness.timezone' => 'UTC',
+        ]);
+        $parser = app(PublishDateParser::class);
+        $policy = app(\App\Services\News\FreshnessPolicy::class);
+
+        $published = now('UTC')->startOfDay()->addHours(3);
+        $asOffsetString = $published->copy()->setTimezone('-08:00')->toIso8601String();
+
+        $this->assertTrue($policy->isFresh($parser->parse($asOffsetString)));
+    }
+
     public function test_absurdly_old_dates_are_refused(): void
     {
         // A stray number sequence from the visible-text fallback can parse into
