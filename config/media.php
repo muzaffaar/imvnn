@@ -111,6 +111,75 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Image roles — what an image IS, not how good it looks
+    |--------------------------------------------------------------------------
+    |
+    | Quality scoring ranks pictures against each other; it cannot tell an
+    | author's avatar from the article's photograph, because an avatar is a
+    | genuinely high-quality image. Observed on a Hugging Face article: ten of
+    | sixteen candidates were contributor avatars scoring 0.57-0.69 against a
+    | 0.35 quality floor, out-ranking the article's own figures at 0.61.
+    |
+    | Substring matching, case-insensitive. URL markers are matched against the
+    | path and query only, never the host — `avatar_hosts` covers hostnames, so
+    | a stray "profile" in a query parameter cannot condemn a real photo.
+    |
+    | See App\Services\Media\Scoring\ImageRoleClassifier.
+    */
+    'image_roles' => [
+        // Dedicated avatar CDNs. Decisive on their own: these hostnames serve
+        // nothing but profile pictures.
+        'avatar_hosts' => [
+            'cdn-avatars.huggingface.co',
+            'avatars.githubusercontent.com',
+            'secure.gravatar.com',
+            'gravatar.com',
+            'pbs.twimg.com/profile_images',
+        ],
+
+        'avatar_url_markers' => [
+            'avatar', 'gravatar', 'profile-pic', 'profile_pic', 'profile-photo',
+            'profile_photo', 'profilephoto', 'headshot', 'userpic', 'user-pic',
+            '/author/', '/authors/', '/byline', '/contributor', '/people/',
+        ],
+
+        // Alt text is written for screen readers, so it names the subject
+        // plainly: "Alejo Lopez Avila's avatar", "Photo of Jane Doe".
+        'avatar_alt_markers' => [
+            'avatar', 'profile photo', 'profile picture', 'headshot',
+            'portrait of', 'photo of ', 'picture of ',
+        ],
+
+        'chrome_url_markers' => [
+            'logo', 'wordmark', 'favicon', '/icons/', 'icon-', '-icon',
+            '_icon', 'sprite', 'badge', 'spacer', 'placeholder',
+            'social-', 'share-', 'button', 'arrow', 'chevron', 'bullet',
+        ],
+
+        'chrome_alt_markers' => [
+            'logo', 'icon', 'wordmark',
+        ],
+
+        'promo_url_markers' => [
+            '/ads/', '/ad-', 'advert', 'sponsor', 'promo', 'banner',
+            'newsletter', 'subscribe', 'cta-',
+        ],
+
+        // A square image this small or smaller is an avatar or an icon in
+        // practically every case: article photography and charts are landscape
+        // or portrait, and a square illustration worth publishing is bigger
+        // than a profile thumbnail. This is the backstop that catches avatar
+        // CDNs nobody has added a pattern for yet — 96x96 author headshots and
+        // 200x200 contributor pictures both land here.
+        'square_icon_max_edge' => 400,
+        'square_tolerance' => 0.12,
+
+        // Tracking and spacer images.
+        'pixel_max_edge' => 2,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Relevance analysis
     |--------------------------------------------------------------------------
     */

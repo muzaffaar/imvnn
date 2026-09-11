@@ -32,6 +32,12 @@ class RenditionKeyBuilder
     /** Rendition markers CDNs append; applied repeatedly since they chain. */
     private const RENDITION_PATTERNS = [
         '/\.(width|height|max|min|fill|crop|scale|resize)-\d+(x\d+)?$/i',
+        // A bare keyword left behind once its dimensions have been stripped by
+        // a later pattern in this same list. `Hero_Image_4.max-600x600.format-webp`
+        // loses `.format-webp`, then `-600x600`, which leaves `.max` stranded
+        // where the first pattern can no longer see it — so that rendition kept
+        // its own key and the same hero image reached an album twice.
+        '/\.(width|height|max|min|fill|crop|scale|resize)$/i',
         '/\.format-[a-z0-9]+$/i',
         '/\.[0-9a-f]{6,40}$/i',                 // cache-busting content hash: Foo.2e16d0ba
         '/[-_]\d{2,4}x\d{2,4}$/',               // Foo-600x600
@@ -64,13 +70,38 @@ class RenditionKeyBuilder
         $path = parse_url($url, PHP_URL_PATH) ?? $url;
         $name = pathinfo($path, PATHINFO_FILENAME);
 
-        $normalized = $this->stripRenditionMarkers($name);
+        $normalized = $this->stripRenditionMarkers($this->stripSizeSuffix($name));
 
         if (mb_strlen($normalized) < self::MIN_DISTINCTIVE_LENGTH) {
             return $host.'|'.strtolower(trim($path, '/'));
         }
 
         return $host.'|'.mb_strtolower($normalized);
+    }
+
+    /**
+     * Google's image CDNs encode the rendition as an `=`-delimited option
+     * string glued straight onto the image id, with no dot and no extension:
+     * `…vOjFcTcd…=w1200-h630-n-nu-rw`. Every pattern in RENDITION_PATTERNS
+     * anchors on a `.` or a trailing `-NNNxNNN`, so none of them touch it, and
+     * one image served at five sizes produced five different keys — which is
+     * exactly how the same picture reached a Telegram album twice (observed on
+     * a DeepMind article: `=w2000-h1260` and `=w1920-h1080` of one figure
+     * occupied two of four album slots).
+     *
+     * Splitting on the first `=` is safe because the id itself never contains
+     * one: it is base64url, whose alphabet excludes `=` except as terminal
+     * padding, which these ids do not carry.
+     */
+    private function stripSizeSuffix(string $name): string
+    {
+        $position = strpos($name, '=');
+
+        if ($position === false || $position === 0) {
+            return $name;
+        }
+
+        return substr($name, 0, $position);
     }
 
     private function stripRenditionMarkers(string $name): string

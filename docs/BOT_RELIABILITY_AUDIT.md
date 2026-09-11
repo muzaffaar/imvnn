@@ -18,6 +18,50 @@ Reviewed ingestion, article parsing, media extraction/ranking, caption compositi
 - Link previews: disable automatic previews for text posts.
 - Freshness boundary: scheduler excludes the following day's exact midnight, matching ingestion.
 
+## Wrong and duplicated images in published posts
+
+Two defects were visible in published albums.
+
+**The same picture in two slots.** `lh3.googleusercontent.com` encodes the
+rendition as `=w2000-h1260-n-nu` glued onto the image id, with no dot and no
+extension. Every `RenditionKeyBuilder` pattern anchors on a `.` or a trailing
+`-NNNxNNN`, so none matched: one DeepMind figure served at five sizes produced
+five keys, and two of them took two of four slots in one album. The key now
+truncates at the first `=`.
+
+**Author and contributor avatars published as article images.** Quality scoring
+cannot catch these, and that is the point worth recording: an avatar is not a
+low-quality image. It is sharp, well-compressed and ideally proportioned for
+Telegram, so every quality signal rates it highly. On one Hugging Face article,
+ten of sixteen candidates were contributor avatars scoring 0.57-0.69 against a
+0.35 floor while the article's own figures scored 0.61 — the avatars ranked
+*above* the real content. A 200x200 avatar also passed the 200px minimum, which
+is a strict `<` comparison.
+
+`ImageRoleClassifier` now answers "what is this image" separately from "how good
+is it", returning `content`, `avatar`, `chrome`, `pixel` or `promo` from URL, alt
+text and dimensions. Only `content` is publishable. It runs at extraction, so no
+row is created, and again after probing, where the small-square rule catches
+avatar CDNs that no pattern covers yet. See docs/MEDIA_ARCHITECTURE.md.
+
+**Fewer images than the article has.** Deduplication ran *after* the probe
+window was taken, so five renditions of one figure and a run of avatars could
+consume the entire budget and the article's remaining figures were never probed
+or published. The window is now budgeted in distinct pictures, with every
+rendition of a chosen picture still probed, because which rendition to keep can
+only be decided from real dimensions. Lazy-loading attributes beyond
+`data-src`/`data-srcset` are also read now, and `src` is consulted last, since a
+lazy image's `src` is usually a placeholder rather than the photograph.
+
+Over-filtering proved more costly than under-filtering. Adding `related` and
+`sidebar` to the stripped-container list removed an article's own figures,
+because a class like `sidebar-right` describes the page's layout rather than the
+element's role. The structural strip list is therefore narrow and limited to
+words that can only name a person or a discussion; the classifier does the real
+work. Covered by `tests/Unit/ImageRoleClassifierTest.php` and
+`tests/Feature/ImageFilteringTest.php`, which pin the false-positive cases
+alongside the true ones.
+
 ## Stranded publication candidates
 
 A second pass found three ways an article could become permanently
@@ -66,7 +110,7 @@ Items with `telegram_publish_started_at IS NOT NULL` and `telegram_published_at 
 - Scheduler tokens are not consumed per execution; duplicate executions with the same token can still fork a scheduler chain. Individual item claims prevent duplicate articles, but channel cadence is not guaranteed at actual send time.
 - AI prompts request factual summaries, but no independent factual verifier checks names, numbers, quotations or translation accuracy. Script validation alone cannot establish language correctness. Humor and tone remain configurable existing policy.
 - Article date fallback can still mistake a visible event/update date for publication time; canonical links and redirects are not reconciled with publisher-declared article identity.
-- Media selection is heuristic and probing is bounded to eight candidates. Semantic relevance, watermark detection, near-duplicate reference images and best-HD-video discovery are not guaranteed.
+- Media selection is heuristic and probing is bounded to twelve distinct pictures per article. Image *role* (content vs avatar/chrome/pixel/promo) is now classified explicitly, but semantic relevance, watermark detection, near-duplicate reference images and best-HD-video discovery are still not guaranteed. The role classifier is pattern- and geometry-based: an avatar that is large, non-square and served from an article CDN would still pass, and only a vision model would catch it.
 - Source names are already included by the caption header; article attribution links and Telegram buttons remain absent by existing design.
 
 ## Validation

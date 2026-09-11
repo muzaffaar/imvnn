@@ -11,6 +11,7 @@ use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\Media\Deduplication\RenditionKeyBuilder;
 use App\Services\Media\ImageDimensionProbe;
+use App\Services\Media\Scoring\ImageRoleClassifier;
 use App\Services\Media\Scoring\MediaQualityScorer;
 use App\Services\Media\Scoring\TelegramCompatibilityChecker;
 use App\Support\Observability\PipelineLogger;
@@ -34,14 +35,33 @@ class MediaSelectionService
      */
     private const UNPUBLISHABLE_EXTENSIONS = ['svg', 'svgz', 'ico', 'bmp', 'tif', 'tiff'];
 
-    /** How many top candidates get their dimensions probed before the final ranking. */
-    private const PROBE_CANDIDATES = 8;
+    /**
+     * How many distinct *pictures* get probed before the final ranking —
+     * counted per rendition group, not per URL.
+     *
+     * The distinction is the whole point. Counting URLs, five renditions of one
+     * DeepMind figure plus a run of Hugging Face contributor avatars filled the
+     * entire budget, so the article's remaining figures were never probed and
+     * never published: an album came back half empty from a pool of seventeen
+     * candidates. Counting pictures, the budget buys this many different
+     * subjects.
+     *
+     * Every rendition of a chosen picture is still probed, because which
+     * rendition to keep can only be decided from real dimensions — a
+     * `width-200` thumbnail and a `width-1600` original are indistinguishable
+     * until then. PROBE_REQUEST_CAP bounds the resulting request count.
+     */
+    private const PROBE_CANDIDATES = 12;
+
+    /** Hard ceiling on probe requests per article, whatever the group sizes. */
+    private const PROBE_REQUEST_CAP = 24;
 
     public function __construct(
         private readonly MediaQualityScorer $qualityScorer,
         private readonly TelegramCompatibilityChecker $telegramChecker,
         private readonly RenditionKeyBuilder $renditionKeys,
         private readonly ImageDimensionProbe $dimensionProbe,
+        private readonly ImageRoleClassifier $roleClassifier,
     ) {}
 
     public function selectForNewsItem(NewsItem $newsItem, TelegramChannel $channel): PostMediaPlan
@@ -53,6 +73,7 @@ class MediaSelectionService
         $usable = $pool
             ->filter(fn (MediaAsset $asset) => $asset->isUsable())
             ->reject(fn (MediaAsset $asset) => $this->isUnpublishableFormat($asset))
+            ->reject(fn (MediaAsset $asset) => $this->isNonContentImage($asset))
             ->map(fn (MediaAsset $asset) => [$asset, $this->contextualScore($asset)])
             ->filter(fn (array $pair) => $pair[1] >= $minQuality)
             ->sortByDesc(fn (array $pair) => $pair[1])
@@ -60,15 +81,23 @@ class MediaSelectionService
             ->values();
         $qualityEligibleCount = $usable->count();
 
-        // After ranking, so each surviving picture is represented by its
-        // best-scoring rendition rather than an arbitrary one.
+        // Budget the probe window in distinct pictures rather than URLs, while
+        // still handing every rendition of each chosen picture to the probe.
+        $distinctCount = $this->renditionGroups($usable)->count();
+        $toProbe = $this->takeDistinctPictures($usable);
 
         // Only now — for the few candidates of an article actually being
         // published — is it worth learning real dimensions, which is what
         // makes the resolution/aspect-ratio/Telegram-limit checks below
         // mean anything for reference-only images.
-        $usable = $this->probeAndRerank($usable->take(self::PROBE_CANDIDATES));
+        $usable = $this->probeAndRerank($toProbe);
+
+        // Both passes again, now that dimensions are real: probing is what
+        // reveals a 200x200 avatar whose URL gave nothing away, and what
+        // supplies the content hashes that catch renditions the URL heuristics
+        // missed.
         $usable = $this->dropDuplicateRenditions($usable)
+            ->reject(fn (MediaAsset $asset) => $this->isNonContentImage($asset))
             ->filter(fn (MediaAsset $asset) => $this->contextualScore($asset) >= $minQuality)
             ->values();
 
@@ -78,7 +107,8 @@ class MediaSelectionService
                 'telegram_channel_id' => $channel->id,
                 'candidate_pool_count' => $poolCount,
                 'quality_eligible_count' => $qualityEligibleCount,
-                'reason' => 'no_asset_survived_format_dimension_and_quality_checks',
+                'distinct_picture_count' => $distinctCount,
+                'reason' => 'no_asset_survived_role_format_dimension_and_quality_checks',
             ]);
 
             return PostMediaPlan::none();
@@ -89,6 +119,7 @@ class MediaSelectionService
             'telegram_channel_id' => $channel->id,
             'candidate_pool_count' => $poolCount,
             'quality_eligible_count' => $qualityEligibleCount,
+            'distinct_picture_count' => $distinctCount,
             'final_usable_count' => $usable->count(),
         ]);
 
@@ -155,6 +186,39 @@ class MediaSelectionService
     }
 
     /**
+     * Rank-ordered groups of renditions of the same picture.
+     *
+     * @param  Collection<int, MediaAsset>  $ranked
+     * @return Collection<string, Collection<int, MediaAsset>>
+     */
+    private function renditionGroups(Collection $ranked): Collection
+    {
+        return $ranked->groupBy(fn (MediaAsset $asset) => $this->renditionKeys->keyFor($asset));
+    }
+
+    /**
+     * The renditions belonging to the best PROBE_CANDIDATES distinct pictures,
+     * flattened back into one rank-ordered collection and capped at
+     * PROBE_REQUEST_CAP members.
+     *
+     * Groups are taken whole rather than trimmed, so the later
+     * probe-then-deduplicate step still gets to compare a picture's
+     * `width-200` and `width-1600` renditions on their real dimensions instead
+     * of guessing from the URL.
+     *
+     * @param  Collection<int, MediaAsset>  $ranked
+     * @return Collection<int, MediaAsset>
+     */
+    private function takeDistinctPictures(Collection $ranked): Collection
+    {
+        return $this->renditionGroups($ranked)
+            ->take(self::PROBE_CANDIDATES)
+            ->flatten()
+            ->take(self::PROBE_REQUEST_CAP)
+            ->values();
+    }
+
+    /**
      * Probes real dimensions, then drops what those dimensions reveal to be
      * unpublishable and re-ranks on the now-meaningful scores. Everything
      * here is invisible until dimensions are known, which is why it can't
@@ -210,6 +274,42 @@ class MediaSelectionService
         }
 
         return ($asset->width + $asset->height) > config('media.telegram.photo_max_dimension_sum');
+    }
+
+    /**
+     * Rejects anything that is not a picture of the story — an author avatar, a
+     * logo, a tracking pixel, an ad. Run twice around the probe, because the
+     * small-square rule that catches an unfamiliar avatar CDN needs real
+     * dimensions, and before probing a reference-only asset has none.
+     *
+     * Non-visual assets (video, embeds) are not classified: the patterns
+     * describe still images, and a video URL is judged by VideoDecisionService.
+     */
+    private function isNonContentImage(MediaAsset $asset): bool
+    {
+        if (! $asset->type->isVisual()) {
+            return false;
+        }
+
+        $role = $this->roleClassifier->classify(
+            $asset->original_url,
+            $asset->alt_text,
+            $asset->width,
+            $asset->height,
+        );
+
+        if ($role->isPublishable()) {
+            return false;
+        }
+
+        PipelineLogger::debug('media.selection_role_rejected', [
+            'media_asset_id' => $asset->id,
+            'role' => $role->value,
+            'width' => $asset->width,
+            'height' => $asset->height,
+        ]);
+
+        return true;
     }
 
     private function isUnpublishableFormat(MediaAsset $asset): bool

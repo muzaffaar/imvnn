@@ -113,6 +113,20 @@ since that's exactly what differs between renditions. A filename shorter
 than 8 characters falls back to the full path, so two unrelated `hero.jpg`
 under different article paths don't collapse into one.
 
+**Google's CDNs need separate handling.** Every marker above anchors on a
+`.` or a trailing `-NNNxNNN`, but `lh3.googleusercontent.com` glues the
+rendition onto the image id with `=` and no extension at all:
+
+```
+…vOjFcTcdX2GCEB9yk…=w2000-h1260-n-nu
+…vOjFcTcdX2GCEB9yk…=w1920-h1080-n-nu
+```
+
+No pattern touched that, so one DeepMind figure served at five sizes
+produced five different keys and two of them occupied two of four slots in
+the same published album. The key now truncates at the first `=`, which is
+safe because the id itself is base64url and cannot contain one.
+
 Applied in `MediaSelectionService` *after* ranking — so the surviving
 rendition of each picture is its best-scoring one — rather than at
 ingestion, keeping it non-destructive and consistent with the rule below.
@@ -262,9 +276,13 @@ inline images and only 1 gets posted), so eagerly generating 4 variants ×
 1. Gather the pool: the article's own media **∪** its event's shared pool
    (`event_media`) if it belongs to one (see below).
 2. Resolve every asset to its canonical form (`MediaAsset::canonical()`),
-   filter to `isUsable()` (not failed/rejected/still a duplicate row), and
-   drop anything below the channel's `min_quality_score` rule.
-3. Rank by cached `quality_score` descending.
+   filter to `isUsable()` (not failed/rejected/still a duplicate row), drop
+   anything whose **role** is not article content (see below), and drop
+   anything below the channel's `min_quality_score` rule.
+3. Rank by cached `quality_score` descending, then deduplicate renditions so
+   the probe budget below buys distinct *pictures* rather than distinct URLs.
+   Probe dimensions, then re-run the role and duplicate checks, which only
+   now have real dimensions and content hashes to work with.
 4. Decide the shape:
    - A qualifying video, and the channel prefers video
      (`rules.prefer_video`, default true) → **Video** if we actually hold
@@ -278,6 +296,56 @@ inline images and only 1 gets posted), so eagerly generating 4 variants ×
 
 Channel-specific behavior lives in `telegram_channels.rules` (JSONB) rather
 than code, so per-channel tuning doesn't need a deploy.
+
+### Image role — what an image *is*, not how good it looks
+
+Quality scoring ranks pictures against each other. It cannot tell an author's
+avatar from the article's photograph, because an avatar is not low-quality: it
+is sharp, well-compressed and ideally proportioned for Telegram. On one
+Hugging Face article, ten of sixteen candidates were contributor avatars
+scoring 0.57-0.69 against a 0.35 floor, while the article's own figures scored
+0.61 — so the avatars ranked *above* the real content and filled album slots
+with strangers' faces. No weighting fixes that. The avatar is the wrong
+subject, not a worse picture.
+
+`ImageRoleClassifier` answers the subject question separately, from URL, alt
+text and dimensions, with no network call. It returns one of `content`,
+`avatar`, `chrome`, `pixel` or `promo`; only `content` is publishable. Signals,
+in order:
+
+- **Avatar CDN hostnames** (`cdn-avatars.huggingface.co`,
+  `avatars.githubusercontent.com`, gravatar, …) — decisive alone, since those
+  hosts serve nothing else.
+- **URL path markers** — `avatar`, `headshot`, `/author/`, `userpic`, …
+  matched against path and query only, never the host, so a stray `profile` in
+  a query parameter cannot condemn a real photo.
+- **Alt text** — written for screen readers, so it names the subject plainly:
+  "Alejo Lopez Avila's avatar", "Photo of Jane Doe".
+- **Small square** — the backstop that needs no pattern list maintained. A
+  square image at or under 400px is an avatar or an icon in practically every
+  case: article photography and charts are landscape or portrait, and a square
+  illustration worth publishing is bigger than a profile thumbnail. Dimensions
+  come from the filename (`ali-kani-scaled-96x96.jpg`) when the markup supplies
+  none, taking the *last* size group so a chained rendition like
+  `nv-blog-1280x680-1-960x540.jpg` is judged at the size actually served.
+
+Patterns and thresholds live in `config/media.php` under `image_roles`.
+
+Run at two points, because the signals arrive at different times:
+
+| Stage | Has | Catches |
+|---|---|---|
+| `ExtractMediaJob` | URL, alt, markup/filename size | Avatar hosts and named paths, before a row is ever created |
+| `MediaSelectionService` | Probed dimensions | Unfamiliar avatar CDNs, via the small-square rule |
+
+`HtmlContentExtractor` also removes byline, contributor and comment containers
+by class or id before collecting anything. That list is deliberately narrow and
+limited to words that can only describe a person or a discussion: `related` and
+`sidebar` were tried and both matched a wrapper *around* the article on the
+NVIDIA blog, since a class like `sidebar-right` describes the page's layout
+rather than the element's role. That removed the article's own figures and cut
+one post from seven candidates to four. The structural pass is a cheap
+optimisation; the classifier is the actual defence.
 
 ## Event media pool
 

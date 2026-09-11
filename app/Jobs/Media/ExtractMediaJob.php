@@ -16,6 +16,7 @@ use App\Services\Media\Deduplication\MediaDuplicateDetectionService;
 use App\Services\Media\Extraction\MediaExtractionManager;
 use App\Services\Media\MediaIngestionPolicy;
 use App\Services\Media\MediaPipelineProgressTracker;
+use App\Services\Media\Scoring\ImageRoleClassifier;
 use App\Services\Media\Scoring\MediaRelevanceScorer;
 use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
@@ -52,6 +53,7 @@ class ExtractMediaJob implements ShouldQueue
         MediaIngestionPolicy $policy,
         MediaDuplicateDetectionService $duplicateDetection,
         MediaRelevanceScorer $relevanceScorer,
+        ImageRoleClassifier $roleClassifier,
     ): void {
         $newsItem = NewsItem::with('source')->findOrFail($this->newsItemId);
 
@@ -77,8 +79,30 @@ class ExtractMediaJob implements ShouldQueue
         $ignoredAssetCount = 0;
         $createdAssetCount = 0;
         $readyReferenceCount = 0;
+        $rejectedRoles = [];
 
         foreach ($candidates as $extracted) {
+            // What the image IS, before anything about how good it looks. An
+            // avatar or a site icon is rejected here rather than downstream so
+            // it never becomes a row to store, score, probe and rank — and,
+            // more to the point, never competes for an album slot with the
+            // article's own pictures.
+            if ($extracted->type->isVisual()) {
+                $role = $roleClassifier->classify(
+                    $extracted->url,
+                    $extracted->altText,
+                    $extracted->width,
+                    $extracted->height,
+                );
+
+                if (! $role->isPublishable()) {
+                    $rejectedRoles[$role->value] = ($rejectedRoles[$role->value] ?? 0) + 1;
+                    $ignoredAssetCount++;
+
+                    continue;
+                }
+            }
+
             $canonicalUrl = $duplicateDetection->normalizeUrl($extracted->url);
 
             if ($existingMatch = $duplicateDetection->findByUrl($extracted->url, $extracted->type)) {
@@ -137,6 +161,7 @@ class ExtractMediaJob implements ShouldQueue
             'ignored_asset_count' => $ignoredAssetCount,
             'ready_reference_count' => $readyReferenceCount,
             'follow_up_job_count' => count($followUpJobs),
+            'rejected_roles' => $rejectedRoles,
         ]);
     }
 
