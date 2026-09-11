@@ -224,6 +224,15 @@ class PublishToTelegramJob implements ShouldQueue
     {
         $reason = PipelineLogger::exceptionMessage($exception);
 
+        // A terminal publishing failure must not leave the scheduler's claim
+        // behind forever. The next paced scheduler pass may select it again.
+        NewsItem::whereKey($this->newsItemId)
+            ->whereNull('telegram_published_at')
+            ->update([
+                'publish_queued_at' => null,
+                'telegram_publish_started_at' => null,
+            ]);
+
         MediaProcessingLog::record(
             ProcessingStage::Publishing, ProcessingLogStatus::Failed,
             newsItemId: $this->newsItemId,

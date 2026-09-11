@@ -135,7 +135,7 @@ class TelegramPublisher
             throw new TelegramApiException(
                 "Telegram API rejected {$method}: ".str_replace($token, '[redacted]', $description),
                 retryAfter: $code === 429 ? max(1, (int) ($body['parameters']['retry_after'] ?? 60)) : null,
-                mediaRejected: $code === 400 && (bool) preg_match('/photo|video|media|file|image|HTTP URL/i', $description),
+                mediaRejected: $code === 400 && $this->isMediaRejection((string) $description),
             );
         }
 
@@ -157,5 +157,24 @@ class TelegramPublisher
         ]);
 
         return $result;
+    }
+
+    /**
+     * Telegram uses both stable error tokens and prose for failures fetching
+     * remote media. Keep this narrow: a generic HTTP 400 (bad chat, markup,
+     * permissions, etc.) must still fail/retry rather than skip media.
+     */
+    private function isMediaRejection(string $description): bool
+    {
+        $normalized = strtoupper($description);
+
+        if (preg_match('/\b(?:WEBPAGE_CURL_FAILED|WEBPAGE_MEDIA_EMPTY|(?:PHOTO|VIDEO|IMAGE|FILE|MEDIA)_[A-Z0-9_]+)\b/', $normalized)) {
+            return true;
+        }
+
+        return (bool) preg_match(
+            '/\b(?:FAILED TO (?:GET|FETCH|DOWNLOAD)|WRONG|INVALID|EMPTY|UNAVAILABLE)\b.*\b(?:HTTP(?:S)? URL|HTTP URL CONTENT|FILE IDENTIFIER)\b|\b(?:HTTP(?:S)? URL|HTTP URL CONTENT|FILE IDENTIFIER)\b.*\b(?:FAILED|INVALID|EMPTY|UNAVAILABLE)\b/',
+            $normalized,
+        );
     }
 }

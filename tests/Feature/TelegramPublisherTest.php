@@ -67,4 +67,21 @@ class TelegramPublisherTest extends TestCase
             $this->assertFalse($e->deliveryUnknown);
         }
     }
+
+    public function test_webpage_curl_failed_is_a_media_rejection(): void
+    {
+        $publisher = $this->publisher(new Response(400, [], json_encode([
+            'ok' => false,
+            'error_code' => 400,
+            'description' => 'Bad Request: failed to send message #4 with the error message "WEBPAGE_CURL_FAILED"',
+        ])));
+
+        try {
+            $publisher->sendTextOnly(new TelegramChannel(['chat_id' => '@test']), 'test');
+            $this->fail('Expected rejection');
+        } catch (TelegramApiException $e) {
+            $this->assertTrue($e->mediaRejected);
+            $this->assertFalse($e->deliveryUnknown);
+        }
+    }
 }

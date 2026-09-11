@@ -2,9 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Enums\MediaStatus;
+use App\Enums\MediaType;
 use App\Enums\PostMediaType;
 use App\Jobs\Media\SelectMediaForPublishingJob;
 use App\Jobs\Telegram\PublishToTelegramJob;
+use App\Models\MediaAsset;
 use App\Models\NewsItem;
 use App\Models\Source;
 use App\Models\TelegramChannel;
@@ -93,5 +96,51 @@ class PublishingSafetyTest extends TestCase
         (new SelectMediaForPublishingJob($news->id, 1))->failed(new \RuntimeException('Selection failed'));
 
         $this->assertNull($news->fresh()->publish_queued_at);
+    }
+
+    public function test_media_group_rejection_falls_back_to_a_single_image_without_retrying_the_job(): void
+    {
+        [$news] = $this->publication();
+        $first = MediaAsset::create([
+            'type' => MediaType::Image,
+            'status' => MediaStatus::Ready,
+            'original_url' => 'https://example.com/first.jpg',
+        ]);
+        $second = MediaAsset::create([
+            'type' => MediaType::Image,
+            'status' => MediaStatus::Ready,
+            'original_url' => 'https://example.com/second.jpg',
+        ]);
+        $channel = TelegramChannel::firstOrFail();
+        $job = new PublishToTelegramJob($channel->id, $news->id, PostMediaType::MediaGroup, [$first->id, $second->id], 'Caption', null);
+
+        $publisher = $this->mock(TelegramPublisher::class);
+        $publisher->shouldReceive('sendMediaGroup')
+            ->once()
+            ->andThrow(new TelegramApiException('WEBPAGE_CURL_FAILED', mediaRejected: true));
+        $publisher->shouldReceive('sendSinglePhoto')
+            ->once()
+            ->andReturn(['message_id' => 42]);
+        $publisher->shouldNotReceive('sendTextOnly');
+
+        $job->handle($publisher);
+
+        $this->assertNotNull($news->fresh()->telegram_published_at);
+        $this->assertSame(MediaStatus::Published, $first->fresh()->status);
+        $this->assertSame(MediaStatus::Ready, $second->fresh()->status);
+    }
+
+    public function test_exhausted_publishing_failure_releases_the_scheduler_and_delivery_claims(): void
+    {
+        [$news, $job] = $this->publication();
+        $news->update([
+            'publish_queued_at' => now(),
+            'telegram_publish_started_at' => now(),
+        ]);
+
+        $job->failed(new \RuntimeException('Final publishing failure'));
+
+        $this->assertNull($news->fresh()->publish_queued_at);
+        $this->assertNull($news->fresh()->telegram_publish_started_at);
     }
 }
