@@ -12,13 +12,13 @@ use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\Telegram\TelegramApiException;
 use App\Services\Telegram\TelegramPublisher;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -60,6 +60,12 @@ class PublishToTelegramJob implements ShouldQueue
             )->values();
 
         if (! $channel->is_active) {
+            PipelineLogger::warning('telegram.publish_skipped', [
+                'telegram_channel_id' => $channel->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => 'channel_inactive',
+            ]);
+
             return;
         }
 
@@ -69,24 +75,54 @@ class PublishToTelegramJob implements ShouldQueue
             ->whereNull('telegram_published_at')
             ->whereNull('telegram_publish_started_at')
             ->update(['telegram_publish_started_at' => now()])) {
+            PipelineLogger::info('telegram.publish_skipped', [
+                'telegram_channel_id' => $channel->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => 'already_claimed_or_published',
+            ]);
+
             return;
         }
+
+        PipelineLogger::info('telegram.publish_started', [
+            'telegram_channel_id' => $channel->id,
+            'news_item_id' => $this->newsItemId,
+            'requested_media_type' => $this->type->value,
+            'asset_count' => $assets->count(),
+        ]);
 
         try {
             $result = $this->attempt($publisher, $channel, $assets);
         } catch (TelegramApiException $e) {
             if ($e->deliveryUnknown) {
+                PipelineLogger::exception('telegram.publish_delivery_unknown', $e, [
+                    'telegram_channel_id' => $channel->id,
+                    'news_item_id' => $this->newsItemId,
+                ]);
                 $this->fail($e);
 
                 return;
             }
 
-            NewsItem::whereKey($this->newsItemId)->update(['telegram_publish_started_at' => null]);
+            $this->releasePublishClaim();
             if ($e->retryAfter !== null) {
+                PipelineLogger::exception('telegram.publish_rate_limited', $e, [
+                    'telegram_channel_id' => $channel->id,
+                    'news_item_id' => $this->newsItemId,
+                    'retry_after_seconds' => $e->retryAfter,
+                ], 'warning');
                 $this->release($e->retryAfter);
 
                 return;
             }
+
+            throw $e;
+        } catch (Throwable $e) {
+            // This is known not to have reached Telegram. Clear the durable
+            // claim before Laravel retries, otherwise the next attempt sees
+            // telegram_publish_started_at and exits as if another worker had
+            // already delivered the post.
+            $this->releasePublishClaim();
 
             throw $e;
         }
@@ -102,6 +138,14 @@ class PublishToTelegramJob implements ShouldQueue
         foreach ($result['published_asset_ids'] ?? [] as $id) {
             MediaAsset::whereKey($id)->update(['status' => MediaStatus::Published]);
         }
+
+        PipelineLogger::info('telegram.publish_completed', [
+            'telegram_channel_id' => $channel->id,
+            'news_item_id' => $this->newsItemId,
+            'strategy' => $result['strategy'],
+            'telegram_message_id' => $result['message_id'] ?? null,
+            'published_asset_count' => count($result['published_asset_ids'] ?? []),
+        ]);
 
     }
 
@@ -163,16 +207,34 @@ class PublishToTelegramJob implements ShouldQueue
 
     private function logFallback(string $message, Throwable $e): void
     {
-        Log::warning("[telegram-publish] {$message}: {$e->getMessage()}", ['news_item_id' => $this->newsItemId]);
+        PipelineLogger::exception('telegram.publish_media_fallback', $e, [
+            'news_item_id' => $this->newsItemId,
+            'fallback_reason' => $message,
+        ], 'warning');
+    }
+
+    private function releasePublishClaim(): void
+    {
+        NewsItem::whereKey($this->newsItemId)
+            ->whereNull('telegram_published_at')
+            ->update(['telegram_publish_started_at' => null]);
     }
 
     public function failed(Throwable $exception): void
     {
+        $reason = PipelineLogger::exceptionMessage($exception);
+
         MediaProcessingLog::record(
             ProcessingStage::Publishing, ProcessingLogStatus::Failed,
             newsItemId: $this->newsItemId,
-            message: $exception->getMessage(),
+            message: $reason,
             attempt: $this->attempts(),
         );
+
+        PipelineLogger::exception('telegram.publish_failed', $exception, [
+            'telegram_channel_id' => $this->telegramChannelId,
+            'news_item_id' => $this->newsItemId,
+            'attempt' => $this->attempts(),
+        ]);
     }
 }

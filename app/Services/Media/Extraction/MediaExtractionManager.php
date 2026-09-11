@@ -5,6 +5,7 @@ namespace App\Services\Media\Extraction;
 use App\DTOs\ExtractedMedia;
 use App\DTOs\ExtractionContext;
 use App\Services\Media\Extraction\Adapters\PlatformAdapterInterface;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Support\Collection;
 
 /**
@@ -35,7 +36,10 @@ class MediaExtractionManager
             try {
                 $raw = $raw->concat($extractor->extract($context));
             } catch (\Throwable $e) {
-                report($e);
+                PipelineLogger::exception('media.extractor_failed', $e, [
+                    'news_item_id' => $context->newsItemId,
+                    'extractor' => $extractor::class,
+                ], 'warning');
             }
         }
 

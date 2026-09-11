@@ -5,12 +5,12 @@ namespace App\Jobs\News;
 use App\DTOs\RawArticleCandidate;
 use App\Models\Source;
 use App\Services\News\NewsIngestionService;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -49,6 +49,9 @@ class ProcessNewsCandidateJob implements ShouldQueue
 
     public function failed(Throwable $exception): void
     {
-        Log::warning("[news-parse] candidate {$this->candidate->url} failed: {$exception->getMessage()}");
+        PipelineLogger::exception('news.candidate_failed', $exception, [
+            'source_id' => $this->sourceId,
+            'article_url' => PipelineLogger::url($this->candidate->url),
+        ]);
     }
 }

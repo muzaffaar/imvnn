@@ -4,8 +4,10 @@ namespace Tests\Feature;
 
 use App\DTOs\ArticleAnalysisResult;
 use App\DTOs\RawArticleCandidate;
+use App\Jobs\News\FetchNewsSourceJob;
 use App\Models\Source;
 use App\Services\Http\BoundedHttpFetcher;
+use App\Services\Http\BoundedHttpFetchException;
 use App\Services\Media\Deduplication\UrlNormalizer;
 use App\Services\News\AiRelevanceFilter;
 use App\Services\News\ArticleAnalyzerInterface;
@@ -13,6 +15,7 @@ use App\Services\News\ArticleContentExtractor;
 use App\Services\News\FreshnessPolicy;
 use App\Services\News\HtmlCrawlSourceFetcher;
 use App\Services\News\NewsIngestionService;
+use App\Services\News\NewsSourceFetcherManager;
 use App\Services\News\RssSourceFetcher;
 use Carbon\CarbonImmutable;
 use GuzzleHttp\Client;
@@ -71,7 +74,13 @@ class SourceFetchersTest extends TestCase
             'slug' => 'example-feed',
             'fetch_type' => 'rss',
             'source_url' => 'https://example.test/feed.xml',
-            'fetch_options' => ['skip_prefilter' => true],
+            'fetch_options' => [
+                'skip_prefilter' => true,
+                'headers' => [
+                    'user-agent' => 'example-source-fetcher/2.0',
+                    'X-Source-Test' => 'rss-header-override',
+                ],
+            ],
             'is_active' => true,
         ]);
 
@@ -99,6 +108,8 @@ class SourceFetchersTest extends TestCase
         $source->refresh();
         $this->assertSame('"feed-v1"', $source->feed_etag);
         $this->assertSame('Wed, 10 Sep 2026 12:00:00 GMT', $source->feed_last_modified);
+        $this->assertSame('example-source-fetcher/2.0', $history[0]['request']->getHeaderLine('User-Agent'));
+        $this->assertSame('rss-header-override', $history[0]['request']->getHeaderLine('X-Source-Test'));
 
         $notModifiedHistory = [];
         $notModifiedFetcher = new RssSourceFetcher($this->boundedFetcher([
@@ -109,6 +120,48 @@ class SourceFetchersTest extends TestCase
         $request = $notModifiedHistory[0]['request'];
         $this->assertSame('"feed-v1"', $request->getHeaderLine('If-None-Match'));
         $this->assertSame('Wed, 10 Sep 2026 12:00:00 GMT', $request->getHeaderLine('If-Modified-Since'));
+    }
+
+    public function test_bounded_fetch_exception_retains_the_http_status_for_retry_policy(): void
+    {
+        config(['media.limits.user_agent' => 'imvnn-news-fetcher/1.0']);
+        $history = [];
+        $fetcher = $this->boundedFetcher([new Response(400)], $history);
+
+        try {
+            $fetcher->downloadToMemory('https://example.test/rejected', 1024);
+            $this->fail('Expected a bounded HTTP exception.');
+        } catch (BoundedHttpFetchException $exception) {
+            $this->assertSame(400, $exception->statusCode);
+            $this->assertSame('https://example.test/rejected', $exception->url);
+            $this->assertFalse($exception->isRetryable());
+            $this->assertSame('imvnn-news-fetcher/1.0', $history[0]['request']->getHeaderLine('User-Agent'));
+        }
+
+        $this->assertTrue((new BoundedHttpFetchException('rate limited', statusCode: 429))->isRetryable());
+        $this->assertTrue((new BoundedHttpFetchException('upstream unavailable', statusCode: 503))->isRetryable());
+        $this->assertFalse((new BoundedHttpFetchException('not found', statusCode: 404))->isRetryable());
+    }
+
+    public function test_fetch_job_fails_permanent_http_errors_without_releasing_a_retry(): void
+    {
+        $source = Source::create([
+            'name' => 'Permanently Rejected',
+            'slug' => 'permanently-rejected',
+            'fetch_type' => 'html_crawl',
+            'source_url' => 'https://example.test/rejected',
+            'is_active' => true,
+        ]);
+        $manager = $this->mock(NewsSourceFetcherManager::class);
+        $manager->shouldReceive('fetch')
+            ->once()
+            ->andThrow(new BoundedHttpFetchException('HTTP 400', statusCode: 400, url: 'https://example.test/rejected'));
+
+        $job = (new FetchNewsSourceJob($source->id))->withFakeQueueInteractions();
+        $job->handle($manager);
+
+        $job->assertFailedWith(BoundedHttpFetchException::class);
+        $job->assertNotReleased();
     }
 
     public function test_verified_feed_can_preserve_its_summary_when_article_fetch_is_blocked(): void

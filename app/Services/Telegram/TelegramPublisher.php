@@ -6,6 +6,7 @@ use App\Enums\MediaVariantType;
 use App\Models\MediaAsset;
 use App\Models\TelegramChannel;
 use App\Services\Media\Storage\MediaStorageService;
+use App\Support\Observability\PipelineLogger;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 
@@ -104,18 +105,33 @@ class TelegramPublisher
         } catch (GuzzleException $e) {
             // Exception URLs contain the bot token. Never persist the original
             // exception or its message in queue failures/logs.
+            PipelineLogger::exception('telegram.api_transport_failed', $e, ['method' => $method], 'warning');
+
             throw new TelegramApiException("Telegram delivery outcome unknown calling {$method}.", deliveryUnknown: true);
         }
 
         $body = json_decode((string) $response->getBody(), true) ?? [];
 
         if ($response->getStatusCode() >= 500 || ! is_array($body) || ! array_key_exists('ok', $body)) {
+            PipelineLogger::warning('telegram.api_delivery_unknown', [
+                'method' => $method,
+                'http_status' => $response->getStatusCode(),
+                'response_shape_valid' => is_array($body) && array_key_exists('ok', $body),
+            ]);
+
             throw new TelegramApiException("Telegram delivery outcome unknown calling {$method}.", deliveryUnknown: true);
         }
 
         if ($body['ok'] !== true) {
             $description = $body['description'] ?? 'unknown error';
             $code = (int) ($body['error_code'] ?? $response->getStatusCode());
+            PipelineLogger::warning('telegram.api_rejected', [
+                'method' => $method,
+                'http_status' => $response->getStatusCode(),
+                'api_error_code' => $code,
+                'reason' => (string) $description,
+            ]);
+
             throw new TelegramApiException(
                 "Telegram API rejected {$method}: ".str_replace($token, '[redacted]', $description),
                 retryAfter: $code === 429 ? max(1, (int) ($body['parameters']['retry_after'] ?? 60)) : null,
@@ -134,6 +150,11 @@ class TelegramPublisher
                 throw new TelegramApiException('Telegram returned an invalid delivery receipt.', deliveryUnknown: true);
             }
         }
+
+        PipelineLogger::debug('telegram.api_accepted', [
+            'method' => $method,
+            'message_count' => count($messages),
+        ]);
 
         return $result;
     }

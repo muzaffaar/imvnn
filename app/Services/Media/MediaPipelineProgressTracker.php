@@ -2,6 +2,7 @@
 
 namespace App\Services\Media;
 
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -29,6 +30,11 @@ class MediaPipelineProgressTracker
     public function start(string $newsItemId, int $expectedJobs): void
     {
         Cache::put($this->key($newsItemId), $expectedJobs, now()->addHours(2));
+
+        PipelineLogger::debug('media.progress_started', [
+            'news_item_id' => $newsItemId,
+            'expected_job_count' => $expectedJobs,
+        ]);
     }
 
     /** @return bool true if this call completed the last outstanding job for this news item */
@@ -37,6 +43,8 @@ class MediaPipelineProgressTracker
         $key = $this->key($newsItemId);
 
         if (! Cache::has($key)) {
+            PipelineLogger::warning('media.progress_state_missing', ['news_item_id' => $newsItemId]);
+
             return false;
         }
 
@@ -45,8 +53,15 @@ class MediaPipelineProgressTracker
         if ($remaining <= 0) {
             Cache::forget($key);
 
+            PipelineLogger::info('media.progress_completed', ['news_item_id' => $newsItemId]);
+
             return true;
         }
+
+        PipelineLogger::debug('media.progress_waiting', [
+            'news_item_id' => $newsItemId,
+            'remaining_job_count' => $remaining,
+        ]);
 
         return false;
     }

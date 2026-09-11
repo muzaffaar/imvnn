@@ -2,6 +2,7 @@
 
 namespace App\Services\Media;
 
+use App\Support\Observability\PipelineLogger;
 use Intervention\Image\ImageManager;
 
 /**
@@ -20,13 +21,17 @@ class SharpnessEstimator
     public function __construct(private readonly ImageManager $manager) {}
 
     /** @return float 0..1 */
-    public function estimate(string $binaryContents): float
+    public function estimate(string $binaryContents, ?string $mediaAssetId = null): float
     {
         try {
             $image = $this->manager->read($binaryContents)
                 ->resize(self::SAMPLE_SIZE, self::SAMPLE_SIZE)
                 ->greyscale();
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            PipelineLogger::exception('media.sharpness_decode_failed', $e, [
+                'media_asset_id' => $mediaAssetId,
+            ], 'warning');
+
             return 0.0; // undecodable -> corruption, not sharpness — caller treats 0 as "bad"
         }
 

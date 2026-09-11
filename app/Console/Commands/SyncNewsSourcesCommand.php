@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Source;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 
@@ -23,6 +24,7 @@ class SyncNewsSourcesCommand extends Command
 
         if (empty($sources)) {
             $this->warn('config/news_sources.php has no sources configured yet — nothing to sync.');
+            PipelineLogger::warning('news.source_sync_skipped', ['reason' => 'configuration_empty']);
 
             return self::SUCCESS;
         }
@@ -46,6 +48,8 @@ class SyncNewsSourcesCommand extends Command
 
             $this->info("Synced: {$entry['name']} ({$slug})");
         }
+
+        PipelineLogger::info('news.source_sync_completed', ['source_count' => count($sources)]);
 
         return self::SUCCESS;
     }

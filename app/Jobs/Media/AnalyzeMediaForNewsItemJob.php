@@ -9,6 +9,7 @@ use App\Models\NewsItem;
 use App\Services\Media\EventMediaPoolService;
 use App\Services\Media\Scoring\MediaQualityScorer;
 use App\Services\Media\Scoring\RelevanceAnalysisService;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -44,6 +45,11 @@ class AnalyzeMediaForNewsItemJob implements ShouldQueue
     ): void {
         $newsItem = NewsItem::with(['mediaAssets' => fn ($q) => $q->with('source', 'duplicates')])->findOrFail($this->newsItemId);
 
+        PipelineLogger::debug('media.analysis_started', [
+            'news_item_id' => $newsItem->id,
+            'asset_count' => $newsItem->mediaAssets->count(),
+        ]);
+
         $relevanceAnalysis->analyzeForNewsItem($newsItem);
 
         foreach ($newsItem->mediaAssets as $asset) {
@@ -68,14 +74,24 @@ class AnalyzeMediaForNewsItemJob implements ShouldQueue
             ProcessingStage::QualityAnalysis, ProcessingLogStatus::Succeeded,
             newsItemId: $newsItem->id,
         );
+
+        PipelineLogger::info('media.analysis_completed', [
+            'news_item_id' => $newsItem->id,
+            'asset_count' => $newsItem->mediaAssets->count(),
+            'usable_asset_count' => $newsItem->mediaAssets->filter(fn ($asset) => $asset->isUsable())->count(),
+        ]);
     }
 
     public function failed(Throwable $exception): void
     {
+        $reason = PipelineLogger::exceptionMessage($exception);
+
         MediaProcessingLog::record(
             ProcessingStage::QualityAnalysis, ProcessingLogStatus::Failed,
             newsItemId: $this->newsItemId,
-            message: $exception->getMessage(),
+            message: $reason,
         );
+
+        PipelineLogger::exception('media.analysis_failed', $exception, ['news_item_id' => $this->newsItemId]);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Services\Media\Scoring;
 
 use App\Models\NewsItem;
+use App\Support\Observability\PipelineLogger;
 
 /**
  * Finalizes relevance scores for a news item's media once assets are
@@ -53,5 +54,12 @@ class RelevanceAnalysisService
 
             $promoted++;
         }
+
+        PipelineLogger::info('media.relevance_analysis_completed', [
+            'news_item_id' => $newsItem->id,
+            'candidate_count' => $pivots->count(),
+            'vision_scored_count' => $promoted,
+            'vision_analyzer' => $this->visionAnalyzer::class,
+        ]);
     }
 }

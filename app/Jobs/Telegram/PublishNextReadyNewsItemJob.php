@@ -7,13 +7,13 @@ use App\Jobs\Media\SelectMediaForPublishingJob;
 use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\News\FreshnessPolicy;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -71,6 +71,8 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
 
         self::dispatch($channel->id, $token);
 
+        PipelineLogger::info('telegram.scheduler_started', ['telegram_channel_id' => $channel->id]);
+
         return $token;
     }
 
@@ -81,13 +83,18 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
         if ($channel && $channel->publish_chain_token !== $this->chainToken) {
             // A newer chain owns this channel — retire quietly, without
             // rescheduling, so forked chains collapse back to one.
-            Log::info("[publishing-scheduler] channel={$channel->id} stale chain retired");
+            PipelineLogger::info('telegram.scheduler_stale_chain_retired', ['telegram_channel_id' => $channel->id]);
 
             return;
         }
 
         try {
             if (! $channel || ! $channel->is_active) {
+                PipelineLogger::warning('telegram.scheduler_skipped', [
+                    'telegram_channel_id' => $this->telegramChannelId,
+                    'reason' => $channel ? 'channel_inactive' : 'channel_not_found',
+                ]);
+
                 return;
             }
 
@@ -95,6 +102,18 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
 
             if ($candidate && $this->claim($candidate)) {
                 SelectMediaForPublishingJob::dispatch($candidate->id, $channel->id);
+                PipelineLogger::info('telegram.scheduler_candidate_queued', [
+                    'telegram_channel_id' => $channel->id,
+                    'news_item_id' => $candidate->id,
+                    'best_quality_score' => $candidate->best_quality_score,
+                ]);
+            } elseif ($candidate) {
+                PipelineLogger::warning('telegram.scheduler_claim_lost', [
+                    'telegram_channel_id' => $channel->id,
+                    'news_item_id' => $candidate->id,
+                ]);
+            } else {
+                PipelineLogger::debug('telegram.scheduler_no_candidate', ['telegram_channel_id' => $channel->id]);
             }
         } finally {
             $this->reschedule($channel);
@@ -160,7 +179,12 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
 
         self::dispatch($channel->id, $this->chainToken)->delay(now()->addSeconds($delaySeconds));
 
-        Log::info("[publishing-scheduler] channel={$channel->id} backlog={$backlogCount} next check in {$delaySeconds}s");
+        PipelineLogger::info('telegram.scheduler_rescheduled', [
+            'telegram_channel_id' => $channel->id,
+            'backlog_count' => $backlogCount,
+            'delay_seconds' => $delaySeconds,
+            'channel_active' => $channel->is_active,
+        ]);
     }
 
     /**

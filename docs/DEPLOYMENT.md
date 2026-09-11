@@ -46,6 +46,20 @@ processing. Configure `MEDIA_DISK=s3` with a public object URL when downloaded
 media may be published; Telegram fetches media by URL rather than from this
 server's local disk.
 
+Use the server-side source-fetch identity unless a publisher explicitly
+requires a different one. Remove an old Chrome-like
+`HTTP_FETCH_USER_AGENT` value if it exists in the deployed `.env`:
+
+```dotenv
+HTTP_FETCH_USER_AGENT=imvnn-news-fetcher/1.0
+```
+
+The default request headers are deliberately not a browser impersonation.
+If one publisher needs an extra header, configure it only on that source in
+`config/news_sources.php` under `fetch_options.headers`, then run
+`php artisan news-sources:sync`. Source options cannot disable TLS
+verification, timeouts, redirect handling, or download-size limits.
+
 ### Choose the AI provider
 
 Gemini remains the default and uses its native API:
@@ -88,7 +102,11 @@ php artisan migrate --force
 ## 4. Writable paths
 
 ```bash
-sudo mkdir -p /var/log/imvnn
+# The Supervisor `user=` must name a real Linux account. This directly fixes
+# `ERROR: CANT_REREAD: Invalid user name imvnn` on a new VPS.
+id imvnn || sudo useradd --system --home-dir /var/www/imvnn --shell /sbin/nologin --user-group imvnn
+
+sudo install -d -o imvnn -g imvnn -m 0755 /var/log/imvnn
 sudo chown -R imvnn:imvnn /var/www/imvnn/storage /var/www/imvnn/bootstrap/cache /var/log/imvnn
 ```
 
@@ -127,12 +145,29 @@ command is the better choice when a human is present.
 ## 6. Workers (supervisor)
 
 ```bash
-sudo cp deploy/supervisor/imvnn.conf /etc/supervisord.d/imvnn.ini
-# edit `directory` and `user` to match the deploy
+cd /var/www/imvnn
+# Edit only if the project path or actual Linux service account differs.
+sudo install -o root -g root -m 0644 deploy/supervisor/imvnn.conf /etc/supervisord.d/imvnn.ini
 sudo supervisorctl reread
 sudo supervisorctl update
+sudo supervisorctl restart 'imvnn-pipeline:*' imvnn-video imvnn-telegram imvnn-scheduler
 sudo supervisorctl status
 ```
+
+The installed configuration is the complete worker topology. Do not replace
+it with a worker that listens to only a subset of queues:
+
+| Supervisor program | Queues | Purpose |
+| --- | --- | --- |
+| `imvnn-pipeline` (2 processes) | `news-fetch`, `news-parse`, `media-extraction`, `media-download`, `media-processing`, `image-analysis`, `media-optimization`, `media-selection` | Normal ingestion and media work, including the publishing scheduler and selection. |
+| `imvnn-video` | `video-processing` | Isolated 900-second video jobs. |
+| `imvnn-telegram` | `telegram-publishing` | Low-latency Telegram API delivery. |
+| `imvnn-scheduler` | `schedule:work` | Schedules periodic source fetch and queue-health checks. |
+
+`media-selection` is intentional in `imvnn-pipeline`: it consumes both
+`PublishNextReadyNewsItemJob` and `SelectMediaForPublishingJob`. If this
+program is absent or uses an old queue list, `publish_queued_at` stays `NULL`
+and selection jobs remain at `attempts = 0`.
 
 `stopwaitsecs` in that file is deliberately larger than each queue's longest
 job — see the comment at the top of it. Shortening it reintroduces a real
@@ -153,10 +188,28 @@ the fetch runs twice.
 ## 8. Verify
 
 ```bash
-php artisan schedule:list                     # news:fetch listed, next due
-php artisan news:fetch                        # force one now
-sudo supervisorctl status                     # all RUNNING
+php artisan schedule:list                                      # news:fetch and queue:health listed
+php artisan queue:health --stuck-after=60                       # configured queues are empty/reserved/delayed
+php artisan news:fetch                                           # dispatch every active source now
+php artisan tinker --execute='App\Jobs\News\FetchNewsSourceJob::dispatchSync((int) App\Models\Source::where("slug", "meta-ai-blog")->valueOrFail("id"));' # actual Laravel Meta fetch + parser
+sudo supervisorctl status                                      # all processes RUNNING
 tail -f storage/logs/laravel.log
+```
+
+The source-specific Meta command uses the same job, fetcher, and HTML crawler
+as the queue worker. It updates `sources.last_fetched_at` and queues any
+discovered candidates for `news-parse`; it is not a curl-only check.
+
+Inspect the expected post-fetch state:
+
+```bash
+php artisan tinker --execute="
+DB::table('sources')->select('id', 'name', 'fetch_type', 'last_fetched_at')->orderBy('id')->get()->each(fn (\$x) => dump(\$x));
+
+DB::table('jobs')->select('queue', DB::raw('COUNT(*) as count'), DB::raw('MAX(attempts) as max_attempts'))->groupBy('queue')->get()->each(fn (\$x) => dump(\$x));
+
+DB::table('news_items')->select('title', 'media_analysis_completed_at', 'publish_queued_at', 'telegram_publish_started_at', 'telegram_published_at')->latest()->limit(20)->get()->each(fn (\$x) => dump(\$x));
+"
 ```
 
 Within a few minutes you should see articles appear:
@@ -182,8 +235,15 @@ cd /var/www/imvnn
 git pull
 composer install --no-dev --optimize-autoloader
 php artisan migrate --force
-sudo supervisorctl restart imvnn:*
+php artisan config:cache
+php artisan news-sources:sync
+sudo install -o root -g root -m 0644 deploy/supervisor/imvnn.conf /etc/supervisord.d/imvnn.ini
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl restart 'imvnn-pipeline:*' imvnn-video imvnn-telegram imvnn-scheduler
+sudo supervisorctl status
 php artisan publishing:start 1
+php artisan queue:health --stuck-after=60
 ```
 
 The final `publishing:start` is idempotent and re-establishes a single
@@ -206,4 +266,6 @@ again the same day.
   cumulative budget ceiling, so watch usage via the
   `[ai-analysis]`/`[ai-caption]` token lines in the log.
 - **Failed jobs** land in `failed_jobs`; inspect with `php artisan
-  queue:failed` and replay with `php artisan queue:retry all`.
+  queue:failed`. After fixing a source or configuration, retry only the
+  verified job UUID(s), for example `php artisan queue:retry <uuid>`; do not
+  blindly retry unrelated failed work.

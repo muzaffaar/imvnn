@@ -6,6 +6,7 @@ use App\Enums\MediaVariantType;
 use App\Models\MediaAsset;
 use App\Models\MediaVariant;
 use App\Services\Media\Storage\MediaStorageService;
+use App\Support\Observability\PipelineLogger;
 
 /**
  * Generates (if missing) and persists one named variant for an asset. Callers
@@ -26,15 +27,32 @@ class MediaVariantService
             ?? $asset->variants()->where('variant_type', $variantType)->first();
 
         if ($existing) {
+            PipelineLogger::debug('media.variant_reused', [
+                'media_asset_id' => $asset->id,
+                'variant_type' => $variantType->value,
+            ]);
+
             return $existing;
         }
 
         if (! $asset->storage_path) {
+            PipelineLogger::debug('media.variant_skipped', [
+                'media_asset_id' => $asset->id,
+                'variant_type' => $variantType->value,
+                'reason' => 'no_original_storage_path',
+            ]);
+
             return null; // reference-only/embed assets have no bytes to derive a variant from
         }
 
         $original = $this->storage->get($asset->storage_path);
         if (! $original) {
+            PipelineLogger::warning('media.variant_skipped', [
+                'media_asset_id' => $asset->id,
+                'variant_type' => $variantType->value,
+                'reason' => 'original_storage_object_missing',
+            ]);
+
             return null;
         }
 
@@ -54,7 +72,7 @@ class MediaVariantService
             ? [$asset->width, $asset->height]
             : $this->generator->dimensions($encoded);
 
-        return MediaVariant::create([
+        $variant = MediaVariant::create([
             'media_asset_id' => $asset->id,
             'variant_type' => $variantType,
             'storage_path' => $path,
@@ -65,5 +83,15 @@ class MediaVariantService
             'file_size' => strlen($encoded),
             'hash' => $hash,
         ]);
+
+        PipelineLogger::debug('media.variant_created', [
+            'media_asset_id' => $asset->id,
+            'variant_type' => $variantType->value,
+            'file_size' => $variant->file_size,
+            'width' => $variant->width,
+            'height' => $variant->height,
+        ]);
+
+        return $variant;
     }
 }

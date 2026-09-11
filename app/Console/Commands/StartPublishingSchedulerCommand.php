@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Jobs\Telegram\PublishNextReadyNewsItemJob;
 use App\Models\TelegramChannel;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Console\Command;
 
 /**
@@ -24,6 +25,10 @@ class StartPublishingSchedulerCommand extends Command
 
         if (! $channel) {
             $this->error("No TelegramChannel with id {$this->argument('channel')}.");
+            PipelineLogger::warning('telegram.scheduler_start_failed', [
+                'telegram_channel_id' => (int) $this->argument('channel'),
+                'reason' => 'channel_not_found',
+            ]);
 
             return self::FAILURE;
         }

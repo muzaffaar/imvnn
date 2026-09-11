@@ -21,6 +21,6 @@ class NewsSourceSyncTest extends TestCase
         $this->assertSame('rss', $deepMind->fetch_type->value);
         $this->assertTrue((bool) data_get($deepMind->fetch_options, 'skip_prefilter'));
         $this->assertSame('html_crawl', $meta->fetch_type->value);
-        $this->assertSame('//main//a[contains(@href, "/blog/")]', data_get($meta->fetch_options, 'article_link_xpath'));
+        $this->assertSame('//a[contains(@href, "/blog/")]', data_get($meta->fetch_options, 'article_link_xpath'));
     }
 }

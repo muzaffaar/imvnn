@@ -4,6 +4,8 @@ Covers `App\Services\News`, `App\Jobs\News`, `config/news_sources.php`, and
 the `sources` table's fetch-related columns. This is the stage that turns a
 list of source links into `NewsItem` rows — everything after that is the
 media pipeline (see [`docs/MEDIA_ARCHITECTURE.md`](MEDIA_ARCHITECTURE.md)).
+Operational events and the AlmaLinux log runbook are in
+[`docs/OBSERVABILITY.md`](OBSERVABILITY.md).
 
 ## Where source links go
 
@@ -141,6 +143,10 @@ them through its `fetch_options` entry in `config/news_sources.php`, then
     'max_pages' => 3, // bounded: 1–10
     'max_links' => 40, // bounded: 1–100
     'skip_prefilter' => true, // trusted AI-only source only
+    'headers' => [ // optional; overrides only this source's request headers
+        'User-Agent' => 'publisher-approved-fetcher/1.0',
+        'Accept' => 'application/rss+xml, application/xml;q=0.9, */*;q=0.8',
+    ],
 ],
 ```
 
@@ -153,19 +159,28 @@ host remains allowed by default; `allowed_hosts` only adds exact hosts.
 source that is already tightly focused on AI; it increases article-fetch and
 optional model-analysis volume.
 
+All source requests default to the transparent server-side
+`imvnn-news-fetcher/1.0` User-Agent. `headers` is the only HTTP override
+available per source: it is validated for header injection, reaches the RSS
+feed/listing and article-page requests, and overrides the defaults without
+duplicating fetch logic. It cannot alter TLS verification, connection or
+response timeouts, redirects, or byte limits. HTTP errors include source ID,
+name, URL, and status in the structured log. Network failures, 408/425/429,
+and 5xx responses use `FetchNewsSourceJob`'s normal backoff; permanent 4xx
+responses are recorded as terminal failures rather than retried repeatedly.
+
 ### Real sites this was tuned against
 
 Tested live against `anthropic.com/news`, `huggingface.co/blog`,
 `mistral.ai/news`, `news.mit.edu` (homepage and topic-filtered), and
 `research.google/blog`. Two real, non-obvious problems, now fixed:
 
-- **A self-identifying bot User-Agent gets flat-out HTTP 403'd** by several
-  of these sites (confirmed: anthropic.com, huggingface.co) even though
-  there's no real anti-bot *challenge* behind it (no JS challenge, no
-  CAPTCHA) — they simply filter on User-Agent string. A realistic browser
-  UA + `Accept`/`Accept-Language` headers (`BoundedHttpFetcher::browserHeaders()`,
-  `config('media.limits.user_agent')`) was sufficient for all of them; **no
-  headless browser was needed** for any of the sites tested.
+- **User-Agent compatibility is source-specific.** Meta AI returned HTTP 400
+  for the former Chrome-like default but serves its HTML to the transparent
+  server-side default. The shared fetcher therefore uses
+  `imvnn-news-fetcher/1.0`; use the narrowly scoped `headers` option above
+  only when a publisher documents or demonstrably requires a different
+  request identity. No browser automation is part of this pipeline.
 - **Nav menus drown out real articles** without the positive-evidence bar
   above — e.g. mistral.ai's page returned 20 product/pricing links and zero
   actual news posts under the old heuristic, because a same-host multi-segment

@@ -6,6 +6,7 @@ use App\DTOs\RawArticleCandidate;
 use App\Enums\SourceFetchType;
 use App\Models\Source;
 use App\Services\Http\BoundedHttpFetcher;
+use App\Support\Observability\PipelineLogger;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
 use Illuminate\Support\Collection;
@@ -48,6 +49,7 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
     {
         $limits = config('news_sources.limits');
         $options = is_array($source->fetch_options) ? $source->fetch_options : [];
+        $requestHeaders = $this->fetcher->headersFromFetchOptions($options);
         $maxLinks = max(1, min((int) ($options['max_links'] ?? $limits['max_links_per_crawl']), 100));
         $maxPages = max(1, min((int) ($options['max_pages'] ?? 1), 10));
         $allowedHosts = $this->allowedHosts($source, $options);
@@ -56,6 +58,14 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
         $pages = [$source->source_url];
         $visitedPages = [];
         $candidates = collect();
+
+        PipelineLogger::debug('news.crawl_started', [
+            'source_id' => $source->id,
+            'source_slug' => $source->slug,
+            'source_url' => PipelineLogger::url($source->source_url),
+            'max_pages' => $maxPages,
+            'max_links' => $maxLinks,
+        ]);
 
         while ($pages !== [] && count($visitedPages) < $maxPages && $candidates->count() < $maxLinks) {
             $pageUrl = array_shift($pages);
@@ -69,14 +79,21 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
                 $limits['max_page_bytes'],
                 $limits['download_timeout_seconds'],
                 $limits['download_connect_timeout_seconds'],
+                $requestHeaders,
             );
 
             $dom = $this->loadDom($html);
             if (! $dom) {
+                PipelineLogger::warning('news.crawl_invalid_html', [
+                    'source_id' => $source->id,
+                    'source_slug' => $source->slug,
+                    'page_url' => PipelineLogger::url($pageUrl),
+                ]);
+
                 continue;
             }
 
-            foreach ($this->articleAnchors($dom, $options) as $anchor) {
+            foreach ($this->articleAnchors($dom, $options, $source) as $anchor) {
                 $url = $this->resolveArticleUrl(
                     $anchor->getAttribute('href'),
                     $pageUrl,
@@ -102,14 +119,24 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
             }
 
             if (count($visitedPages) < $maxPages && $candidates->count() < $maxLinks) {
-                $next = $this->nextPageUrl($dom, $pageUrl, $allowedHosts, $options);
+                $next = $this->nextPageUrl($dom, $pageUrl, $allowedHosts, $options, $source);
                 if ($next && ! isset($visitedPages[$next])) {
                     $pages[] = $next;
                 }
             }
         }
 
-        return $candidates->values();
+        $result = $candidates->values();
+
+        PipelineLogger::info('news.crawl_completed', [
+            'source_id' => $source->id,
+            'source_slug' => $source->slug,
+            'pages_visited' => count($visitedPages),
+            'candidate_count' => $result->count(),
+            'hit_link_limit' => $result->count() >= $maxLinks,
+        ]);
+
+        return $result;
     }
 
     private function loadDom(string $html): ?\DOMDocument
@@ -123,22 +150,41 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
     }
 
     /** @param array<string, mixed> $options @return iterable<\DOMElement> */
-    private function articleAnchors(\DOMDocument $dom, array $options): iterable
+    private function articleAnchors(\DOMDocument $dom, array $options, Source $source): iterable
     {
         $xpath = new \DOMXPath($dom);
         $expression = $options['article_link_xpath'] ?? '//a[@href]';
 
         if (! is_string($expression)) {
+            PipelineLogger::warning('news.crawl_invalid_article_xpath', [
+                'source_id' => $source->id,
+                'source_slug' => $source->slug,
+                'reason' => 'xpath_not_a_string',
+            ]);
+
             return [];
         }
 
         try {
             $nodes = $xpath->query($expression);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            PipelineLogger::exception('news.crawl_invalid_article_xpath', $e, [
+                'source_id' => $source->id,
+                'source_slug' => $source->slug,
+                'article_link_xpath' => $expression,
+            ], 'warning');
+
             return [];
         }
 
         if (! $nodes) {
+            PipelineLogger::warning('news.crawl_invalid_article_xpath', [
+                'source_id' => $source->id,
+                'source_slug' => $source->slug,
+                'article_link_xpath' => $expression,
+                'reason' => 'xpath_query_failed',
+            ]);
+
             return [];
         }
 
@@ -189,20 +235,41 @@ class HtmlCrawlSourceFetcher implements NewsSourceFetcherInterface
     }
 
     /** @param list<string> $allowedHosts @param array<string, mixed> $options */
-    private function nextPageUrl(\DOMDocument $dom, string $baseUrl, array $allowedHosts, array $options): ?string
+    private function nextPageUrl(\DOMDocument $dom, string $baseUrl, array $allowedHosts, array $options, Source $source): ?string
     {
         $expression = $options['next_page_xpath'] ?? null;
         if (! is_string($expression) || $expression === '') {
+            if ($expression !== null && ! is_string($expression)) {
+                PipelineLogger::warning('news.crawl_invalid_next_page_xpath', [
+                    'source_id' => $source->id,
+                    'source_slug' => $source->slug,
+                    'reason' => 'xpath_not_a_string',
+                ]);
+            }
+
             return null;
         }
 
         try {
             $nodes = (new \DOMXPath($dom))->query($expression);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            PipelineLogger::exception('news.crawl_invalid_next_page_xpath', $e, [
+                'source_id' => $source->id,
+                'source_slug' => $source->slug,
+                'next_page_xpath' => $expression,
+            ], 'warning');
+
             return null;
         }
 
         if (! $nodes) {
+            PipelineLogger::warning('news.crawl_invalid_next_page_xpath', [
+                'source_id' => $source->id,
+                'source_slug' => $source->slug,
+                'next_page_xpath' => $expression,
+                'reason' => 'xpath_query_failed',
+            ]);
+
             return null;
         }
 

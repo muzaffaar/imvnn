@@ -23,7 +23,7 @@ class MediaMetadataExtractor
         $mimeType = $finfo->buffer($binaryContents) ?: $asset->mime_type;
 
         [$width, $height] = $this->imageDimensions($binaryContents);
-        $sharpness = $this->sharpnessEstimator->estimate($binaryContents);
+        $sharpness = $this->sharpnessEstimator->estimate($binaryContents, $asset->id);
 
         $asset->fill([
             'mime_type' => $mimeType,

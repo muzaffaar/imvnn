@@ -13,6 +13,7 @@ use App\Services\Media\Deduplication\RenditionKeyBuilder;
 use App\Services\Media\ImageDimensionProbe;
 use App\Services\Media\Scoring\MediaQualityScorer;
 use App\Services\Media\Scoring\TelegramCompatibilityChecker;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Support\Collection;
 
 /**
@@ -46,6 +47,7 @@ class MediaSelectionService
     public function selectForNewsItem(NewsItem $newsItem, TelegramChannel $channel): PostMediaPlan
     {
         $pool = $this->gatherPool($newsItem);
+        $poolCount = $pool->count();
         $minQuality = $channel->rule('min_quality_score', 0.35);
 
         $usable = $pool
@@ -56,6 +58,7 @@ class MediaSelectionService
             ->sortByDesc(fn (array $pair) => $pair[1])
             ->map(fn (array $pair) => $pair[0])
             ->values();
+        $qualityEligibleCount = $usable->count();
 
         // After ranking, so each surviving picture is represented by its
         // best-scoring rendition rather than an arbitrary one.
@@ -70,8 +73,24 @@ class MediaSelectionService
             ->values();
 
         if ($usable->isEmpty()) {
+            PipelineLogger::info('media.selection_no_usable_asset', [
+                'news_item_id' => $newsItem->id,
+                'telegram_channel_id' => $channel->id,
+                'candidate_pool_count' => $poolCount,
+                'quality_eligible_count' => $qualityEligibleCount,
+                'reason' => 'no_asset_survived_format_dimension_and_quality_checks',
+            ]);
+
             return PostMediaPlan::none();
         }
+
+        PipelineLogger::debug('media.selection_candidates_ready', [
+            'news_item_id' => $newsItem->id,
+            'telegram_channel_id' => $channel->id,
+            'candidate_pool_count' => $poolCount,
+            'quality_eligible_count' => $qualityEligibleCount,
+            'final_usable_count' => $usable->count(),
+        ]);
 
         $video = $usable->first(fn (MediaAsset $a) => $a->type === MediaType::Video);
         $preferVideo = $channel->rule('prefer_video', true);

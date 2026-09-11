@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\PostMediaType;
+use App\Jobs\Media\SelectMediaForPublishingJob;
 use App\Jobs\Telegram\PublishToTelegramJob;
 use App\Models\NewsItem;
 use App\Models\Source;
@@ -67,5 +68,30 @@ class PublishingSafetyTest extends TestCase
         $job->assertReleased(90);
         $this->assertNull($news->fresh()->telegram_publish_started_at);
         $this->assertNull($news->fresh()->telegram_published_at);
+    }
+
+    public function test_known_undelivered_telegram_failure_releases_claim_for_laravel_retry(): void
+    {
+        [$news, $job] = $this->publication();
+        $publisher = $this->mock(TelegramPublisher::class);
+        $publisher->shouldReceive('sendTextOnly')->once()->andThrow(new TelegramApiException('Temporary upstream error'));
+
+        try {
+            $job->handle($publisher);
+            $this->fail('Expected the worker to receive the delivery error for normal retry handling.');
+        } catch (TelegramApiException) {
+            $this->assertNull($news->fresh()->telegram_publish_started_at);
+            $this->assertNull($news->fresh()->telegram_published_at);
+        }
+    }
+
+    public function test_failed_media_selection_releases_the_scheduler_claim(): void
+    {
+        [$news] = $this->publication();
+        $news->update(['publish_queued_at' => now()]);
+
+        (new SelectMediaForPublishingJob($news->id, 1))->failed(new \RuntimeException('Selection failed'));
+
+        $this->assertNull($news->fresh()->publish_queued_at);
     }
 }

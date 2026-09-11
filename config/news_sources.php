@@ -1,5 +1,7 @@
 <?php
 
+use App\Enums\QueueName;
+
 return [
 
     /*
@@ -29,6 +31,9 @@ return [
     |   does not reliably contain an AI keyword
     | - use_feed_content_when_article_unavailable: RSS only; use a feed's
     |   dated summary when a verified source blocks its article page
+    | - headers: source-specific HTTP headers, e.g. ['User-Agent' => '...'];
+    |   these override defaults only and cannot change TLS, timeouts,
+    |   redirect policy, or byte caps
     |
     | Run `php artisan news-sources:sync` after editing this file to write
     | these into the `sources` table (upserted by `slug`, so editing an
@@ -66,7 +71,10 @@ return [
         ],
         ['name' => 'Meta AI Blog', 'slug' => 'meta-ai-blog', 'fetch_type' => 'html_crawl', 'url' => 'https://ai.meta.com/blog/', 'reliability_score' => 90, 'media_reuse_permitted' => false,
             'fetch_options' => [
-                'article_link_xpath' => '//main//a[contains(@href, "/blog/")]',
+                // Meta's server-rendered page currently has no <main> node;
+                // include_url_patterns below keeps this broader selector
+                // restricted to canonical Meta AI article URLs.
+                'article_link_xpath' => '//a[contains(@href, "/blog/")]',
                 'include_url_patterns' => ['https://ai.meta.com/blog/*'],
                 'skip_prefilter' => true,
             ],
@@ -123,8 +131,8 @@ return [
     |--------------------------------------------------------------------------
     */
     'queues' => [
-        'fetch' => 'news-fetch',
-        'parse' => 'news-parse',
+        'fetch' => QueueName::NewsFetch->value,
+        'parse' => QueueName::NewsParse->value,
     ],
 
     /*

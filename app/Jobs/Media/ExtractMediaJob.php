@@ -17,6 +17,7 @@ use App\Services\Media\Extraction\MediaExtractionManager;
 use App\Services\Media\MediaIngestionPolicy;
 use App\Services\Media\MediaPipelineProgressTracker;
 use App\Services\Media\Scoring\MediaRelevanceScorer;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -72,12 +73,17 @@ class ExtractMediaJob implements ShouldQueue
 
         $followUpJobs = [];
         $total = $candidates->count();
+        $existingAssetCount = 0;
+        $ignoredAssetCount = 0;
+        $createdAssetCount = 0;
+        $readyReferenceCount = 0;
 
         foreach ($candidates as $extracted) {
             $canonicalUrl = $duplicateDetection->normalizeUrl($extracted->url);
 
             if ($existingMatch = $duplicateDetection->findByUrl($extracted->url, $extracted->type)) {
                 $this->attachToArticle($newsItem, $existingMatch->canonical, $extracted, $relevanceScorer, $total);
+                $existingAssetCount++;
 
                 continue;
             }
@@ -85,6 +91,8 @@ class ExtractMediaJob implements ShouldQueue
             $action = $policy->decide($extracted, $newsItem->source);
 
             if ($action === MediaIngestionAction::Ignore) {
+                $ignoredAssetCount++;
+
                 continue;
             }
 
@@ -104,6 +112,7 @@ class ExtractMediaJob implements ShouldQueue
                 'alt_text' => $extracted->altText,
                 'metadata' => array_filter(['thumbnail_url' => $extracted->thumbnailUrl]),
             ]);
+            $createdAssetCount++;
 
             $this->attachToArticle($newsItem, $asset, $extracted, $relevanceScorer, $total);
 
@@ -114,10 +123,21 @@ class ExtractMediaJob implements ShouldQueue
             } else {
                 // Reference-only image/embed: nothing to fetch, immediately usable.
                 $asset->update(['status' => MediaStatus::Ready, 'processed_at' => now()]);
+                $readyReferenceCount++;
             }
         }
 
         $this->dispatchFollowUp($newsItem->id, $followUpJobs);
+
+        PipelineLogger::info('media.extraction_completed', [
+            'news_item_id' => $newsItem->id,
+            'candidate_count' => $total,
+            'existing_asset_count' => $existingAssetCount,
+            'created_asset_count' => $createdAssetCount,
+            'ignored_asset_count' => $ignoredAssetCount,
+            'ready_reference_count' => $readyReferenceCount,
+            'follow_up_job_count' => count($followUpJobs),
+        ]);
     }
 
     private function attachToArticle(NewsItem $newsItem, MediaAsset $asset, $extracted, MediaRelevanceScorer $scorer, int $total): void
@@ -158,10 +178,14 @@ class ExtractMediaJob implements ShouldQueue
 
     public function failed(Throwable $exception): void
     {
+        $reason = PipelineLogger::exceptionMessage($exception);
+
         MediaProcessingLog::record(
             ProcessingStage::Extraction, ProcessingLogStatus::Failed,
             newsItemId: $this->newsItemId,
-            message: $exception->getMessage(),
+            message: $reason,
         );
+
+        PipelineLogger::exception('media.extraction_failed', $exception, ['news_item_id' => $this->newsItemId]);
     }
 }

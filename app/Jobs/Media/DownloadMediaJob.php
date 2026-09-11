@@ -14,6 +14,7 @@ use App\Services\Media\Deduplication\MediaDuplicateDetectionService;
 use App\Services\Media\MediaMetadataExtractor;
 use App\Services\Media\MediaPipelineProgressTracker;
 use App\Services\Media\Storage\MediaStorageService;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -65,8 +66,22 @@ class DownloadMediaJob implements ShouldQueue
         MediaStorageService $storage,
     ): void {
         if ($asset->status !== MediaStatus::Pending) {
+            PipelineLogger::debug('media.download_skipped', [
+                'media_asset_id' => $asset->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => 'asset_not_pending',
+                'asset_status' => $asset->status->value,
+            ]);
+
             return; // already processed (e.g. resolved as a duplicate by a concurrent extraction run)
         }
+
+        PipelineLogger::debug('media.download_started', [
+            'media_asset_id' => $asset->id,
+            'news_item_id' => $this->newsItemId,
+            'asset_type' => $asset->type->value,
+            'asset_url' => PipelineLogger::url($asset->original_url),
+        ]);
 
         $asset->update(['status' => MediaStatus::Downloading]);
 
@@ -85,6 +100,12 @@ class DownloadMediaJob implements ShouldQueue
                 'processed_at' => now(),
             ]);
             $this->log($asset, ProcessingLogStatus::Skipped, "exact duplicate of {$duplicate->canonical->id} ({$duplicate->reason})");
+            PipelineLogger::info('media.download_skipped', [
+                'media_asset_id' => $asset->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => 'exact_duplicate',
+                'duplicate_of_id' => $duplicate->canonical->id,
+            ]);
 
             return;
         }
@@ -97,6 +118,12 @@ class DownloadMediaJob implements ShouldQueue
                 'processed_at' => now(),
             ]);
             $this->log($asset, ProcessingLogStatus::Skipped, "perceptual duplicate of {$duplicate->canonical->id} ({$duplicate->reason})");
+            PipelineLogger::info('media.download_skipped', [
+                'media_asset_id' => $asset->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => 'perceptual_duplicate',
+                'duplicate_of_id' => $duplicate->canonical->id,
+            ]);
 
             return;
         }
@@ -121,6 +148,13 @@ class DownloadMediaJob implements ShouldQueue
 
         $asset->update(['status' => MediaStatus::Ready, 'processed_at' => now()]);
         $this->log($asset, ProcessingLogStatus::Succeeded);
+
+        PipelineLogger::info('media.download_completed', [
+            'media_asset_id' => $asset->id,
+            'news_item_id' => $this->newsItemId,
+            'file_size' => strlen($binary),
+            'file_extension' => $extension,
+        ]);
     }
 
     private function guessExtension(MediaAsset $asset, string $binary): string
@@ -162,15 +196,23 @@ class DownloadMediaJob implements ShouldQueue
 
     public function failed(Throwable $exception): void
     {
+        $reason = PipelineLogger::exceptionMessage($exception);
         $asset = MediaAsset::find($this->mediaAssetId);
-        $asset?->update(['status' => MediaStatus::Failed, 'failure_reason' => $exception->getMessage()]);
+        $asset?->update(['status' => MediaStatus::Failed, 'failure_reason' => $reason]);
 
         MediaProcessingLog::record(
             ProcessingStage::Download, ProcessingLogStatus::Failed,
             mediaAssetId: $this->mediaAssetId,
-            message: $exception->getMessage(),
+            message: $reason,
             attempt: $this->attempts(),
         );
+
+        PipelineLogger::exception('media.download_failed', $exception, [
+            'media_asset_id' => $this->mediaAssetId,
+            'news_item_id' => $this->newsItemId,
+            'asset_url' => PipelineLogger::url($asset?->original_url),
+            'attempt' => $this->attempts(),
+        ]);
 
         $this->notifyPipelineProgress();
     }

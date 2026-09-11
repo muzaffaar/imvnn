@@ -2,6 +2,7 @@
 
 namespace App\Services\Http;
 
+use App\Support\Observability\PipelineLogger;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Psr\Http\Message\ResponseInterface;
@@ -17,16 +18,20 @@ class BoundedHttpFetcher
     public function __construct(private readonly Client $client) {}
 
     /** @return array{content_length: ?int, content_type: ?string}|null null if HEAD isn't supported/reachable */
-    public function head(string $url, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null): ?array
+    public function head(string $url, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null, array $requestHeaders = []): ?array
     {
         try {
             $response = $this->client->head($url, [
                 'timeout' => $timeoutSeconds ?? config('media.limits.download_timeout_seconds'),
                 'connect_timeout' => $connectTimeoutSeconds ?? config('media.limits.download_connect_timeout_seconds'),
                 'allow_redirects' => true,
-                'headers' => $this->browserHeaders(),
+                'headers' => $this->headers($requestHeaders),
             ]);
-        } catch (GuzzleException) {
+        } catch (GuzzleException $e) {
+            PipelineLogger::exception('http.head_failed', $e, [
+                'url' => PipelineLogger::url($url),
+            ], 'debug');
+
             return null;
         }
 
@@ -34,21 +39,21 @@ class BoundedHttpFetcher
     }
 
     /** @throws BoundedHttpFetchException */
-    public function downloadToMemory(string $url, int $maxBytes, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null): string
+    public function downloadToMemory(string $url, int $maxBytes, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null, array $requestHeaders = []): string
     {
-        $response = $this->get($url, $timeoutSeconds, $connectTimeoutSeconds);
+        $response = $this->get($url, $timeoutSeconds, $connectTimeoutSeconds, requestHeaders: $requestHeaders);
         $body = $response->getBody();
         $contents = '';
 
         while (! $body->eof()) {
             $contents .= $body->read(8192);
             if (strlen($contents) > $maxBytes) {
-                throw new BoundedHttpFetchException("Response exceeded {$maxBytes} byte limit while downloading {$url}");
+                $this->throwLimitExceeded($url, $maxBytes);
             }
         }
 
         if ($contents === '') {
-            throw new BoundedHttpFetchException("Empty response body downloading {$url}");
+            $this->throwEmptyResponse($url);
         }
 
         return $contents;
@@ -68,13 +73,14 @@ class BoundedHttpFetcher
         ?int $connectTimeoutSeconds = null,
         ?string $etag = null,
         ?string $lastModified = null,
+        array $requestHeaders = [],
     ): ConditionalDownload {
         $headers = array_filter([
             'If-None-Match' => $etag,
             'If-Modified-Since' => $lastModified,
         ], fn (?string $value) => $value !== null && $value !== '');
 
-        $response = $this->get($url, $timeoutSeconds, $connectTimeoutSeconds, $headers);
+        $response = $this->get($url, $timeoutSeconds, $connectTimeoutSeconds, $headers, $requestHeaders);
 
         if ($response->getStatusCode() === 304) {
             return new ConditionalDownload(
@@ -90,12 +96,12 @@ class BoundedHttpFetcher
         while (! $body->eof()) {
             $contents .= $body->read(8192);
             if (strlen($contents) > $maxBytes) {
-                throw new BoundedHttpFetchException("Response exceeded {$maxBytes} byte limit while downloading {$url}");
+                $this->throwLimitExceeded($url, $maxBytes);
             }
         }
 
         if ($contents === '') {
-            throw new BoundedHttpFetchException("Empty response body downloading {$url}");
+            $this->throwEmptyResponse($url);
         }
 
         return new ConditionalDownload(
@@ -115,7 +121,7 @@ class BoundedHttpFetcher
      *
      * @throws BoundedHttpFetchException
      */
-    public function downloadRange(string $url, int $bytes, ?int $timeoutSeconds = null): array
+    public function downloadRange(string $url, int $bytes, ?int $timeoutSeconds = null, array $requestHeaders = []): array
     {
         try {
             $response = $this->client->get($url, [
@@ -123,10 +129,18 @@ class BoundedHttpFetcher
                 'connect_timeout' => config('media.limits.download_connect_timeout_seconds'),
                 'allow_redirects' => true,
                 'stream' => true,
-                'headers' => $this->browserHeaders() + ['Range' => 'bytes=0-'.($bytes - 1)],
+                'headers' => $this->headers($requestHeaders, ['Range' => 'bytes=0-'.($bytes - 1)]),
             ]);
         } catch (GuzzleException $e) {
-            throw new BoundedHttpFetchException("Failed to probe {$url}: {$e->getMessage()}", previous: $e);
+            PipelineLogger::exception('http.range_request_failed', $e, [
+                'url' => PipelineLogger::url($url),
+            ], 'warning');
+
+            throw new BoundedHttpFetchException(
+                'HTTP range request failed for '.PipelineLogger::url($url).'. Reason: '.PipelineLogger::exceptionMessage($e),
+                statusCode: $this->statusCode($e),
+                url: PipelineLogger::url($url),
+            );
         }
 
         $body = $response->getBody();
@@ -157,9 +171,9 @@ class BoundedHttpFetcher
     }
 
     /** @throws BoundedHttpFetchException */
-    public function downloadToFile(string $url, string $destinationPath, int $maxBytes): void
+    public function downloadToFile(string $url, string $destinationPath, int $maxBytes, array $requestHeaders = []): void
     {
-        $response = $this->get($url);
+        $response = $this->get($url, requestHeaders: $requestHeaders);
         $body = $response->getBody();
 
         $handle = fopen($destinationPath, 'wb');
@@ -175,7 +189,7 @@ class BoundedHttpFetcher
                 $written += strlen($chunk);
 
                 if ($written > $maxBytes) {
-                    throw new BoundedHttpFetchException("Download exceeded {$maxBytes} byte limit: {$url}");
+                    $this->throwLimitExceeded($url, $maxBytes);
                 }
 
                 fwrite($handle, $chunk);
@@ -186,12 +200,15 @@ class BoundedHttpFetcher
 
         if ($written === 0) {
             @unlink($destinationPath);
-            throw new BoundedHttpFetchException("Empty response body downloading {$url}");
+            $this->throwEmptyResponse($url);
         }
     }
 
-    /** @param array<string, string> $additionalHeaders */
-    private function get(string $url, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null, array $additionalHeaders = []): ResponseInterface
+    /**
+     * @param  array<string, string>  $additionalHeaders  Headers required by the request type, such as conditional validators.
+     * @param  array<string, string>  $requestHeaders  Source-specific headers, which override defaults but not required headers.
+     */
+    private function get(string $url, ?int $timeoutSeconds = null, ?int $connectTimeoutSeconds = null, array $additionalHeaders = [], array $requestHeaders = []): ResponseInterface
     {
         try {
             return $this->client->get($url, [
@@ -199,28 +216,113 @@ class BoundedHttpFetcher
                 'connect_timeout' => $connectTimeoutSeconds ?? config('media.limits.download_connect_timeout_seconds'),
                 'allow_redirects' => true,
                 'stream' => true,
-                'headers' => array_merge($this->browserHeaders(), $additionalHeaders),
+                'headers' => $this->headers($requestHeaders, $additionalHeaders),
             ]);
         } catch (GuzzleException $e) {
-            throw new BoundedHttpFetchException("Failed to fetch {$url}: {$e->getMessage()}", previous: $e);
+            $statusCode = $this->statusCode($e);
+            PipelineLogger::exception('http.request_failed', $e, [
+                'method' => 'GET',
+                'url' => PipelineLogger::url($url),
+                'http_status' => $statusCode,
+            ], 'warning');
+
+            throw new BoundedHttpFetchException(
+                'HTTP GET request failed for '.PipelineLogger::url($url).'. Reason: '.PipelineLogger::exceptionMessage($e),
+                statusCode: $statusCode,
+                url: PipelineLogger::url($url),
+            );
         }
     }
 
     /**
-     * A self-identifying bot User-Agent (e.g. "NewsMediaBot/1.0") gets flat
-     * out 403'd by several real news/blog sites (confirmed against
-     * anthropic.com, huggingface.co, and others) even though they have no
-     * real anti-bot challenge — they just filter on User-Agent. A realistic
-     * browser UA + Accept headers is enough for all of them; none needed a
-     * headless browser once this was fixed.
+     * Returns validated source-level request headers from `sources.fetch_options`.
+     * Only headers are configurable here; callers cannot disable TLS checks,
+     * change timeouts, alter redirect policy, or bypass byte limits.
+     *
+     * @param  array<string, mixed>  $fetchOptions
+     * @return array<string, string>
      */
-    private function browserHeaders(): array
+    public function headersFromFetchOptions(array $fetchOptions): array
     {
-        return [
+        $configured = $fetchOptions['headers'] ?? [];
+
+        if (! is_array($configured)) {
+            throw new \InvalidArgumentException('sources.fetch_options.headers must be an object of HTTP header names and values.');
+        }
+
+        $headers = [];
+        foreach ($configured as $name => $value) {
+            if (! is_string($name) || ! is_string($value)
+                || $name === '' || preg_match('/[\r\n:]/', $name)
+                || preg_match('/[\r\n]/', $value)) {
+                throw new \InvalidArgumentException('sources.fetch_options.headers contains an invalid HTTP header.');
+            }
+
+            $headers[$name] = $value;
+        }
+
+        return $headers;
+    }
+
+    /** @throws BoundedHttpFetchException */
+    private function throwLimitExceeded(string $url, int $maxBytes): never
+    {
+        PipelineLogger::warning('http.response_too_large', [
+            'url' => PipelineLogger::url($url),
+            'max_bytes' => $maxBytes,
+        ]);
+
+        throw new BoundedHttpFetchException("Response exceeded {$maxBytes} byte limit while downloading ".PipelineLogger::url($url), url: PipelineLogger::url($url));
+    }
+
+    /** @throws BoundedHttpFetchException */
+    private function throwEmptyResponse(string $url): never
+    {
+        PipelineLogger::warning('http.empty_response', ['url' => PipelineLogger::url($url)]);
+
+        throw new BoundedHttpFetchException('Empty response body downloading '.PipelineLogger::url($url), url: PipelineLogger::url($url));
+    }
+
+    /**
+     * Merges defaults, source-specific overrides, and request-required headers
+     * case-insensitively. Conditional validators and Range are applied last
+     * so a source configuration cannot accidentally disable bounded behavior.
+     *
+     * @param  array<string, string>  $requestHeaders
+     * @param  array<string, string>  $requiredHeaders
+     * @return array<string, string>
+     */
+    private function headers(array $requestHeaders = [], array $requiredHeaders = []): array
+    {
+        $headers = [
             'User-Agent' => config('media.limits.user_agent'),
             'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language' => 'en-US,en;q=0.9',
         ];
+
+        foreach ([$requestHeaders, $requiredHeaders] as $overrides) {
+            foreach ($overrides as $name => $value) {
+                foreach ($headers as $existingName => $_) {
+                    if (strcasecmp($existingName, $name) === 0) {
+                        unset($headers[$existingName]);
+                    }
+                }
+                $headers[$name] = $value;
+            }
+        }
+
+        return $headers;
+    }
+
+    private function statusCode(GuzzleException $exception): ?int
+    {
+        if (! method_exists($exception, 'getResponse')) {
+            return null;
+        }
+
+        $response = $exception->getResponse();
+
+        return $response?->getStatusCode();
     }
 
     /** @return array{content_length: ?int, content_type: ?string} */

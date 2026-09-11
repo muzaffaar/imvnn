@@ -2,7 +2,7 @@
 
 namespace App\Services\Media\Video;
 
-use Illuminate\Support\Facades\Log;
+use App\Support\Observability\PipelineLogger;
 use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Process;
 
@@ -30,7 +30,9 @@ class FfmpegService
         try {
             $process->mustRun();
         } catch (ProcessFailedException $e) {
-            Log::warning('ffprobe failed', ['path' => $localPath, 'error' => $e->getMessage()]);
+            PipelineLogger::exception('media.ffprobe_failed', $e, [
+                'binary' => config('media.video.ffprobe_binary'),
+            ], 'warning');
 
             return null;
         }
@@ -99,7 +101,9 @@ class FfmpegService
 
             return true;
         } catch (ProcessFailedException $e) {
-            Log::warning('ffmpeg command failed', ['command' => $process->getCommandLine(), 'error' => $e->getMessage()]);
+            PipelineLogger::exception('media.ffmpeg_failed', $e, [
+                'command' => $process->getCommandLine(),
+            ], 'warning');
 
             return false;
         }

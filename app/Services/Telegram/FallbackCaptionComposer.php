@@ -4,7 +4,7 @@ namespace App\Services\Telegram;
 
 use App\DTOs\PostMediaPlan;
 use App\Models\NewsItem;
-use Illuminate\Support\Facades\Log;
+use App\Support\Observability\PipelineLogger;
 
 /**
  * What SelectMediaForPublishingJob actually depends on. Tries the configured
@@ -27,7 +27,7 @@ class FallbackCaptionComposer implements CaptionComposerInterface
             try {
                 return $this->ai->compose($newsItem, $plan);
             } catch (\Throwable $e) {
-                Log::warning("[telegram-caption] AI caption generation failed for news_item={$newsItem->id}: {$e->getMessage()}");
+                PipelineLogger::exception('telegram.caption_ai_failed', $e, ['news_item_id' => $newsItem->id], 'warning');
 
                 // PlainCaptionComposer can only echo the article's own words,
                 // which are in the source's language — usually English. When
@@ -39,7 +39,7 @@ class FallbackCaptionComposer implements CaptionComposerInterface
                     throw $e;
                 }
 
-                Log::warning("[telegram-caption] falling back to untranslated original for news_item={$newsItem->id}");
+                PipelineLogger::warning('telegram.caption_original_language_fallback', ['news_item_id' => $newsItem->id]);
             }
         }
 

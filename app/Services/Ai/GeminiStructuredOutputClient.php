@@ -2,9 +2,9 @@
 
 namespace App\Services\Ai;
 
+use App\Support\Observability\PipelineLogger;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
-use Illuminate\Support\Facades\Log;
 
 class GeminiStructuredOutputClient implements StructuredOutputClientInterface
 {
@@ -23,6 +23,16 @@ class GeminiStructuredOutputClient implements StructuredOutputClientInterface
             throw new AiProviderException('AI_API_KEY is not configured.');
         }
 
+        PipelineLogger::debug('ai.request_started', [
+            'provider' => 'gemini',
+            'operation' => $operation,
+            'model' => config('services.ai.model'),
+            'max_output_tokens' => $maxOutputTokens,
+            'timeout_seconds' => $timeoutSeconds,
+        ]);
+
+        $startedAt = microtime(true);
+
         try {
             $response = $this->client->post('v1beta/models/'.config('services.ai.model').':generateContent', [
                 'query' => ['key' => $apiKey],
@@ -38,14 +48,27 @@ class GeminiStructuredOutputClient implements StructuredOutputClientInterface
                 'timeout' => $timeoutSeconds,
             ]);
         } catch (GuzzleException $e) {
-            throw new AiProviderException("Gemini {$operation} request failed: {$e->getMessage()}", previous: $e);
+            PipelineLogger::exception('ai.request_failed', $e, [
+                'provider' => 'gemini',
+                'operation' => $operation,
+                'model' => config('services.ai.model'),
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ], 'warning');
+
+            throw new AiProviderException("Gemini {$operation} request failed. Check the provider log for the reason.");
         }
 
         $payload = json_decode((string) $response->getBody(), true);
-        $this->logUsage($operation, is_array($payload) ? ($payload['usageMetadata'] ?? []) : []);
+        $this->logUsage($operation, is_array($payload) ? ($payload['usageMetadata'] ?? []) : [], $startedAt);
 
         $text = data_get($payload, 'candidates.0.content.parts.0.text');
         if (! is_string($text) || $text === '') {
+            PipelineLogger::warning('ai.response_invalid', [
+                'provider' => 'gemini',
+                'operation' => $operation,
+                'reason' => 'missing_content',
+            ]);
+
             throw new AiProviderException("Gemini {$operation} response had no content.");
         }
 
@@ -57,6 +80,12 @@ class GeminiStructuredOutputClient implements StructuredOutputClientInterface
     {
         $decoded = json_decode($text, true);
         if (! is_array($decoded)) {
+            PipelineLogger::warning('ai.response_invalid', [
+                'provider' => 'gemini',
+                'operation' => $operation,
+                'reason' => 'response_not_json_object',
+            ]);
+
             throw new AiProviderException("Gemini {$operation} response was not valid JSON.");
         }
 
@@ -64,13 +93,16 @@ class GeminiStructuredOutputClient implements StructuredOutputClientInterface
     }
 
     /** @param array<string, mixed> $usage */
-    private function logUsage(string $operation, array $usage): void
+    private function logUsage(string $operation, array $usage, float $startedAt): void
     {
-        Log::info("[ai-{$operation}] token usage", [
+        PipelineLogger::info('ai.token_usage', [
             'provider' => 'gemini',
+            'model' => config('services.ai.model'),
+            'operation' => $operation,
             'prompt_tokens' => $usage['promptTokenCount'] ?? null,
             'output_tokens' => $usage['candidatesTokenCount'] ?? null,
             'total_tokens' => $usage['totalTokenCount'] ?? null,
+            'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
         ]);
     }
 }

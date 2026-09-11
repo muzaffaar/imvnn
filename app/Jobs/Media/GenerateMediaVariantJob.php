@@ -5,11 +5,13 @@ namespace App\Jobs\Media;
 use App\Enums\MediaVariantType;
 use App\Models\MediaAsset;
 use App\Services\Media\Variants\MediaVariantService;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Throwable;
 
 /**
  * On-demand variant generation for callers outside the main selection flow
@@ -35,5 +37,18 @@ class GenerateMediaVariantJob implements ShouldQueue
     {
         $asset = MediaAsset::with('variants')->findOrFail($this->mediaAssetId);
         $variantService->ensure($asset, $this->variantType);
+
+        PipelineLogger::info('media.variant_completed', [
+            'media_asset_id' => $asset->id,
+            'variant_type' => $this->variantType->value,
+        ]);
+    }
+
+    public function failed(Throwable $exception): void
+    {
+        PipelineLogger::exception('media.variant_failed', $exception, [
+            'media_asset_id' => $this->mediaAssetId,
+            'variant_type' => $this->variantType->value,
+        ]);
     }
 }

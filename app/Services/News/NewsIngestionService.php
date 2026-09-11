@@ -7,9 +7,10 @@ use App\Jobs\Media\ExtractMediaJob;
 use App\Models\NewsItem;
 use App\Models\Source;
 use App\Services\Http\BoundedHttpFetcher;
+use App\Services\Http\BoundedHttpFetchException;
 use App\Services\Media\Deduplication\UrlNormalizer;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Database\UniqueConstraintViolationException;
-use Illuminate\Support\Facades\Log;
 
 /**
  * Turns one RawArticleCandidate into a NewsItem (or decides not to), and
@@ -33,7 +34,11 @@ class NewsIngestionService
     {
         $canonicalUrl = $this->urlNormalizer->normalize($candidate->url);
 
+        PipelineLogger::debug('news.ingestion_started', $this->candidateContext($source, $candidate));
+
         if (NewsItem::where('canonical_url', $canonicalUrl)->exists()) {
+            $this->logSkip($source, $candidate, 'duplicate_canonical_url');
+
             return null; // already have this article, from this source or another
         }
 
@@ -43,6 +48,8 @@ class NewsIngestionService
         if (! $candidate->skipPrefilter
             && $candidate->prefilterText() !== ''
             && ! $this->prefilter->isRelevant($candidate->prefilterText())) {
+            $this->logSkip($source, $candidate, 'prefilter_not_relevant');
+
             return null;
         }
 
@@ -51,6 +58,10 @@ class NewsIngestionService
         // call on something that could never be published anyway. Crawled
         // candidates have no date yet and are re-checked after parsing.
         if ($candidate->publishedAt !== null && ! $this->freshness->isFresh($candidate->publishedAt)) {
+            $this->logSkip($source, $candidate, 'feed_date_not_fresh', [
+                'published_at' => $candidate->publishedAt->toDateString(),
+            ]);
+
             return null;
         }
 
@@ -58,9 +69,11 @@ class NewsIngestionService
         $articleHtml = $rawHtml;
 
         if ($rawHtml === null) {
-            $rawHtml = $this->fetchArticleHtml($candidate->url);
+            $rawHtml = $this->fetchArticleHtml($source, $candidate->url);
             if ($rawHtml === null) {
                 if (! $candidate->useFeedContentWhenArticleUnavailable || blank($candidate->summary)) {
+                    $this->logSkip($source, $candidate, 'article_unavailable');
+
                     return null;
                 }
 
@@ -69,6 +82,7 @@ class NewsIngestionService
                 // summary, but do not pretend this synthetic HTML was fetched
                 // from the publisher.
                 $rawHtml = $this->feedFallbackHtml($candidate);
+                PipelineLogger::warning('news.feed_summary_fallback', $this->candidateContext($source, $candidate));
             } else {
                 $articleHtml = $rawHtml;
             }
@@ -84,7 +98,9 @@ class NewsIngestionService
         // first point a date exists at all, and it still runs before the
         // AI call.
         if (! $this->freshness->isFresh($publishedAt)) {
-            Log::info("[news-ingestion] skipped as not from today ({$candidate->url}), published_at=".($publishedAt?->toDateString() ?? 'unknown'));
+            $this->logSkip($source, $candidate, 'parsed_date_not_fresh', [
+                'published_at' => $publishedAt?->toDateString(),
+            ]);
 
             return null;
         }
@@ -92,15 +108,19 @@ class NewsIngestionService
         $analysis = $this->articleAnalyzer->analyze($candidate, $heuristicParse, $rawHtml);
 
         if (! $analysis->title) {
+            $this->logSkip($source, $candidate, 'analysis_missing_title');
+
             return null; // nothing usable to publish under
         }
 
         if (! $analysis->isAiRelated) {
+            $this->logSkip($source, $candidate, 'analysis_not_ai_related');
+
             return null;
         }
 
         try {
-            return NewsItem::create([
+            $newsItem = NewsItem::create([
                 'source_id' => $source->id,
                 'title' => $analysis->title,
                 'url' => $candidate->url,
@@ -110,7 +130,17 @@ class NewsIngestionService
                 'content' => $analysis->content,
                 'published_at' => $publishedAt,
             ]);
+
+            PipelineLogger::info('news.ingested', $this->candidateContext($source, $candidate) + [
+                'news_item_id' => $newsItem->id,
+                'used_feed_summary_fallback' => $articleHtml === null && $candidate->rawHtml === null,
+                'published_at' => $publishedAt?->toIso8601String(),
+            ]);
+
+            return $newsItem;
         } catch (UniqueConstraintViolationException) {
+            $this->logSkip($source, $candidate, 'duplicate_race');
+
             return null; // lost a race with a concurrent fetch of the same article
         }
     }
@@ -118,11 +148,14 @@ class NewsIngestionService
     public function dispatchMediaExtraction(NewsItem $newsItem): void
     {
         ExtractMediaJob::dispatch($newsItem->id);
+
+        PipelineLogger::info('media.extraction_queued', ['news_item_id' => $newsItem->id]);
     }
 
-    private function fetchArticleHtml(string $url): ?string
+    private function fetchArticleHtml(Source $source, string $url): ?string
     {
         $limits = config('news_sources.limits');
+        $options = is_array($source->fetch_options) ? $source->fetch_options : [];
 
         try {
             return $this->fetcher->downloadToMemory(
@@ -130,9 +163,16 @@ class NewsIngestionService
                 $limits['max_page_bytes'],
                 $limits['download_timeout_seconds'],
                 $limits['download_connect_timeout_seconds'],
+                $this->fetcher->headersFromFetchOptions($options),
             );
         } catch (\Throwable $e) {
-            Log::warning("[news-ingestion] failed to fetch article page {$url}: {$e->getMessage()}");
+            $httpException = $e instanceof BoundedHttpFetchException ? $e : null;
+            PipelineLogger::exception('news.article_fetch_failed', $e, [
+                'source_id' => $source->id,
+                'source_name' => $source->name,
+                'article_url' => PipelineLogger::url($url),
+                'http_status' => $httpException?->statusCode,
+            ], 'warning');
 
             return null;
         }
@@ -144,5 +184,25 @@ class NewsIngestionService
         $summary = e($candidate->summary ?? '');
 
         return "<article><h1>{$title}</h1><p>{$summary}</p></article>";
+    }
+
+    /** @param array<string, mixed> $context */
+    private function logSkip(Source $source, RawArticleCandidate $candidate, string $reason, array $context = []): void
+    {
+        if (! config('observability.candidate_skips')) {
+            return;
+        }
+
+        PipelineLogger::info('news.ingestion_skipped', $this->candidateContext($source, $candidate) + ['reason' => $reason] + $context);
+    }
+
+    /** @return array<string, int|string|null> */
+    private function candidateContext(Source $source, RawArticleCandidate $candidate): array
+    {
+        return [
+            'source_id' => $source->id,
+            'source_slug' => $source->slug,
+            'article_url' => PipelineLogger::url($candidate->url),
+        ];
     }
 }

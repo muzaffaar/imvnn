@@ -4,7 +4,7 @@ namespace App\Services\Media;
 
 use App\Models\MediaAsset;
 use App\Services\Http\BoundedHttpFetcher;
-use Illuminate\Support\Facades\Log;
+use App\Support\Observability\PipelineLogger;
 
 /**
  * Reads an image's real dimensions without downloading it.
@@ -43,7 +43,10 @@ class ImageDimensionProbe
         try {
             $head = $this->fetcher->downloadRange($asset->original_url, self::PROBE_BYTES);
         } catch (\Throwable $e) {
-            Log::info("[image-probe] could not probe {$asset->original_url}: {$e->getMessage()}");
+            PipelineLogger::exception('media.dimension_probe_failed', $e, [
+                'media_asset_id' => $asset->id,
+                'asset_url' => PipelineLogger::url($asset->original_url),
+            ], 'warning');
 
             return false;
         }
@@ -51,6 +54,11 @@ class ImageDimensionProbe
         $info = @getimagesizefromstring($head['body']);
 
         if (! $info || empty($info[0]) || empty($info[1])) {
+            PipelineLogger::warning('media.dimension_probe_invalid_image', [
+                'media_asset_id' => $asset->id,
+                'asset_url' => PipelineLogger::url($asset->original_url),
+            ]);
+
             return false;
         }
 
@@ -59,6 +67,13 @@ class ImageDimensionProbe
             'height' => $info[1],
             'mime_type' => $asset->mime_type ?: ($info['mime'] ?? null),
             'file_size' => $asset->file_size ?: $head['total_size'],
+        ]);
+
+        PipelineLogger::debug('media.dimension_probe_completed', [
+            'media_asset_id' => $asset->id,
+            'width' => $info[0],
+            'height' => $info[1],
+            'file_size' => $head['total_size'],
         ]);
 
         return true;

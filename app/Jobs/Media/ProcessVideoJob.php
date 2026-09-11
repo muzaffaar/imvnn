@@ -9,6 +9,7 @@ use App\Models\MediaAsset;
 use App\Models\MediaProcessingLog;
 use App\Services\Media\MediaPipelineProgressTracker;
 use App\Services\Media\Video\VideoProcessingService;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -52,8 +53,21 @@ class ProcessVideoJob implements ShouldQueue
     private function process(MediaAsset $asset, VideoProcessingService $service): void
     {
         if ($asset->status !== MediaStatus::Pending) {
+            PipelineLogger::debug('media.video_skipped', [
+                'media_asset_id' => $asset->id,
+                'news_item_id' => $this->newsItemId,
+                'reason' => 'asset_not_pending',
+                'asset_status' => $asset->status->value,
+            ]);
+
             return;
         }
+
+        PipelineLogger::info('media.video_started', [
+            'media_asset_id' => $asset->id,
+            'news_item_id' => $this->newsItemId,
+            'asset_url' => PipelineLogger::url($asset->original_url),
+        ]);
 
         $asset->update(['status' => MediaStatus::Processing]);
 
@@ -64,6 +78,15 @@ class ProcessVideoJob implements ShouldQueue
             mediaAssetId: $asset->id,
             message: 'video ingestion decision: '.data_get($asset->refresh()->metadata, 'ingestion_reason'),
         );
+
+        $asset->refresh();
+        PipelineLogger::info('media.video_completed', [
+            'media_asset_id' => $asset->id,
+            'news_item_id' => $this->newsItemId,
+            'asset_status' => $asset->status->value,
+            'ingestion_reason' => data_get($asset->metadata, 'ingestion_reason'),
+            'file_size' => $asset->file_size,
+        ]);
     }
 
     /** Fires exactly once per job instance: here on success, or from failed() once retries are exhausted. */
@@ -76,15 +99,23 @@ class ProcessVideoJob implements ShouldQueue
 
     public function failed(Throwable $exception): void
     {
+        $reason = PipelineLogger::exceptionMessage($exception);
         $asset = MediaAsset::find($this->mediaAssetId);
-        $asset?->update(['status' => MediaStatus::Failed, 'failure_reason' => $exception->getMessage()]);
+        $asset?->update(['status' => MediaStatus::Failed, 'failure_reason' => $reason]);
 
         MediaProcessingLog::record(
             ProcessingStage::Download, ProcessingLogStatus::Failed,
             mediaAssetId: $this->mediaAssetId,
-            message: $exception->getMessage(),
+            message: $reason,
             attempt: $this->attempts(),
         );
+
+        PipelineLogger::exception('media.video_failed', $exception, [
+            'media_asset_id' => $this->mediaAssetId,
+            'news_item_id' => $this->newsItemId,
+            'asset_url' => PipelineLogger::url($asset?->original_url),
+            'attempt' => $this->attempts(),
+        ]);
 
         $this->notifyPipelineProgress();
     }

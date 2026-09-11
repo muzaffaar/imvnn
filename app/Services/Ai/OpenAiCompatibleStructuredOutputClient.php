@@ -2,9 +2,9 @@
 
 namespace App\Services\Ai;
 
+use App\Support\Observability\PipelineLogger;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class OpenAiCompatibleStructuredOutputClient implements StructuredOutputClientInterface
@@ -41,6 +41,17 @@ class OpenAiCompatibleStructuredOutputClient implements StructuredOutputClientIn
 
         $this->addStructuredOutputFormat($body, $operation, $schema);
 
+        PipelineLogger::debug('ai.request_started', [
+            'provider' => 'openai-compatible',
+            'operation' => $operation,
+            'model' => config('services.ai.model'),
+            'max_output_tokens' => $maxOutputTokens,
+            'timeout_seconds' => $timeoutSeconds,
+            'structured_output' => config('services.ai.openai_compatible.structured_output', 'json_schema'),
+        ]);
+
+        $startedAt = microtime(true);
+
         try {
             $requestOptions = [
                 'json' => $body,
@@ -56,19 +67,38 @@ class OpenAiCompatibleStructuredOutputClient implements StructuredOutputClientIn
 
             $response = $this->client->post(config('services.ai.openai_compatible.path', 'chat/completions'), $requestOptions);
         } catch (GuzzleException $e) {
-            throw new AiProviderException("OpenAI-compatible {$operation} request failed: {$e->getMessage()}", previous: $e);
+            PipelineLogger::exception('ai.request_failed', $e, [
+                'provider' => 'openai-compatible',
+                'operation' => $operation,
+                'model' => config('services.ai.model'),
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ], 'warning');
+
+            throw new AiProviderException("OpenAI-compatible {$operation} request failed. Check the provider log for the reason.");
         }
 
         $payload = json_decode((string) $response->getBody(), true);
-        $this->logUsage($operation, is_array($payload) ? ($payload['usage'] ?? []) : []);
+        $this->logUsage($operation, is_array($payload) ? ($payload['usage'] ?? []) : [], $startedAt);
 
         $text = data_get($payload, 'choices.0.message.content');
         if (! is_string($text) || $text === '') {
+            PipelineLogger::warning('ai.response_invalid', [
+                'provider' => 'openai-compatible',
+                'operation' => $operation,
+                'reason' => 'missing_content',
+            ]);
+
             throw new AiProviderException("OpenAI-compatible {$operation} response had no content.");
         }
 
         $decoded = json_decode($text, true);
         if (! is_array($decoded)) {
+            PipelineLogger::warning('ai.response_invalid', [
+                'provider' => 'openai-compatible',
+                'operation' => $operation,
+                'reason' => 'response_not_json_object',
+            ]);
+
             throw new AiProviderException("OpenAI-compatible {$operation} response was not valid JSON.");
         }
 
@@ -107,13 +137,16 @@ class OpenAiCompatibleStructuredOutputClient implements StructuredOutputClientIn
     }
 
     /** @param array<string, mixed> $usage */
-    private function logUsage(string $operation, array $usage): void
+    private function logUsage(string $operation, array $usage, float $startedAt): void
     {
-        Log::info("[ai-{$operation}] token usage", [
+        PipelineLogger::info('ai.token_usage', [
             'provider' => 'openai-compatible',
+            'model' => config('services.ai.model'),
+            'operation' => $operation,
             'prompt_tokens' => $usage['prompt_tokens'] ?? null,
             'output_tokens' => $usage['completion_tokens'] ?? null,
             'total_tokens' => $usage['total_tokens'] ?? null,
+            'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
         ]);
     }
 }

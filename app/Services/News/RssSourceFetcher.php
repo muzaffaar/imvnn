@@ -6,6 +6,7 @@ use App\DTOs\RawArticleCandidate;
 use App\Enums\SourceFetchType;
 use App\Models\Source;
 use App\Services\Http\BoundedHttpFetcher;
+use App\Support\Observability\PipelineLogger;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use SimpleXMLElement;
@@ -29,6 +30,7 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
     {
         $limits = config('news_sources.limits');
         $options = is_array($source->fetch_options) ? $source->fetch_options : [];
+        $requestHeaders = $this->fetcher->headersFromFetchOptions($options);
 
         $download = $this->fetcher->downloadToMemoryConditionally(
             $source->source_url,
@@ -37,6 +39,7 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
             $limits['download_connect_timeout_seconds'],
             $source->feed_etag,
             $source->feed_last_modified,
+            $requestHeaders,
         );
 
         $source->fill([
@@ -45,10 +48,16 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
         ])->save();
 
         if ($download->wasNotModified()) {
+            PipelineLogger::debug('news.rss_not_modified', [
+                'source_id' => $source->id,
+                'source_slug' => $source->slug,
+                'feed_url' => PipelineLogger::url($source->source_url),
+            ]);
+
             return collect();
         }
 
-        $feed = $this->parseXml($download->body);
+        $feed = $this->parseXml($download->body, $source);
         if (! $feed) {
             return collect();
         }
@@ -74,16 +83,39 @@ class RssSourceFetcher implements NewsSourceFetcherInterface
             }
         }
 
-        return $results->filter(fn (?RawArticleCandidate $c) => $c !== null)
+        $candidates = $results->filter(fn (?RawArticleCandidate $c) => $c !== null)
             ->values()
             ->take($limits['max_items_per_feed_fetch']);
+
+        PipelineLogger::info('news.rss_parsed', [
+            'source_id' => $source->id,
+            'source_slug' => $source->slug,
+            'feed_url' => PipelineLogger::url($source->source_url),
+            'feed_format' => $isAtom ? 'atom' : 'rss',
+            'candidate_count' => $candidates->count(),
+            'candidate_without_published_at_count' => $candidates->filter(
+                fn (RawArticleCandidate $candidate) => $candidate->publishedAt === null,
+            )->count(),
+        ]);
+
+        return $candidates;
     }
 
-    private function parseXml(string $xml): ?SimpleXMLElement
+    private function parseXml(string $xml, Source $source): ?SimpleXMLElement
     {
         libxml_use_internal_errors(true);
         $parsed = simplexml_load_string($xml, SimpleXMLElement::class, LIBXML_NOCDATA | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $errors = libxml_get_errors();
         libxml_clear_errors();
+
+        if (! $parsed) {
+            PipelineLogger::warning('news.rss_invalid_xml', [
+                'source_id' => $source->id,
+                'source_slug' => $source->slug,
+                'feed_url' => PipelineLogger::url($source->source_url),
+                'xml_error' => trim((string) ($errors[0]->message ?? 'parser returned no document')),
+            ]);
+        }
 
         return $parsed ?: null;
     }

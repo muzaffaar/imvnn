@@ -478,15 +478,15 @@ Supervisor (or systemd), one program block per pool, e.g.:
 
 ```ini
 [program:media-fast-worker]
-command=php artisan queue:work redis --queue=media-extraction,media-download,image-analysis,media-optimization,media-selection --tries=3 --max-time=3600
+command=php artisan queue:work --queue=news-fetch,news-parse,media-extraction,media-download,media-processing,image-analysis,media-optimization,media-selection --tries=3 --max-time=3600
 numprocs=4
 
 [program:media-video-worker]
-command=php artisan queue:work redis --queue=video-processing --tries=2 --timeout=900 --max-time=3600
+command=php artisan queue:work --queue=video-processing --tries=2 --timeout=900 --max-time=3600
 numprocs=1   ; deliberately small and separate — see the isolation note above
 
 [program:telegram-publish-worker]
-command=php artisan queue:work redis --queue=telegram-publishing --tries=4 --max-time=3600
+command=php artisan queue:work --queue=telegram-publishing --tries=4 --max-time=3600
 numprocs=2
 ```
 

@@ -5,7 +5,7 @@ namespace App\Services\News;
 use App\DTOs\ArticleAnalysisResult;
 use App\DTOs\ParsedArticle;
 use App\DTOs\RawArticleCandidate;
-use Illuminate\Support\Facades\Log;
+use App\Support\Observability\PipelineLogger;
 
 /**
  * The binding NewsIngestionService actually depends on. Tries the configured
@@ -29,7 +29,9 @@ class FallbackArticleAnalyzer implements ArticleAnalyzerInterface
             try {
                 return $this->ai->analyze($candidate, $heuristicParse, $rawHtml);
             } catch (\Throwable $e) {
-                Log::warning("[news-analysis] AI analysis failed for {$candidate->url}, falling back to heuristic: {$e->getMessage()}");
+                PipelineLogger::exception('news.analysis_ai_fallback', $e, [
+                    'article_url' => PipelineLogger::url($candidate->url),
+                ], 'warning');
             }
         }
 

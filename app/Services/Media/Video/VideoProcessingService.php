@@ -6,11 +6,13 @@ use App\Enums\MediaProvider;
 use App\Enums\MediaStatus;
 use App\Enums\MediaVariantType;
 use App\Models\MediaAsset;
+use App\Models\MediaMetadataEntry;
 use App\Models\MediaVariant;
 use App\Services\Http\BoundedHttpFetcher;
 use App\Services\Media\Deduplication\MediaDuplicateDetectionService;
 use App\Services\Media\Scoring\TelegramCompatibilityChecker;
 use App\Services\Media\Storage\MediaStorageService;
+use App\Support\Observability\PipelineLogger;
 
 /**
  * Owns the full "should we download this video, and if so what do we do with
@@ -71,8 +73,12 @@ class VideoProcessingService
                 ['media_asset_id' => $asset->id, 'variant_type' => MediaVariantType::Thumbnail],
                 ['storage_path' => $path, 'mime_type' => 'image/jpeg', 'format' => 'jpeg', 'file_size' => strlen($bytes), 'hash' => $hash],
             );
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             // Thumbnail is a nice-to-have here; a missing one shouldn't fail the whole job.
+            PipelineLogger::exception('media.video_thumbnail_failed', $e, [
+                'media_asset_id' => $asset->id,
+                'thumbnail_url' => PipelineLogger::url($thumbnailUrl),
+            ], 'warning');
         }
     }
 
@@ -117,7 +123,7 @@ class VideoProcessingService
             ]);
 
             if (! empty($probe)) {
-                \App\Models\MediaMetadataEntry::updateOrCreate(
+                MediaMetadataEntry::updateOrCreate(
                     ['media_asset_id' => $asset->id, 'key' => 'ffprobe'],
                     ['value' => $probe, 'extracted_by' => 'ffmpeg_service'],
                 );

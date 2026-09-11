@@ -1,5 +1,7 @@
 <?php
 
+use App\Enums\QueueName;
+
 return [
 
     /*
@@ -25,14 +27,14 @@ return [
     | Nothing here shares a queue with the app's default HTTP-triggered jobs.
     */
     'queues' => [
-        'extraction' => 'media-extraction',
-        'download' => 'media-download',
-        'processing' => 'media-processing',
-        'image_analysis' => 'image-analysis',
-        'video_processing' => 'video-processing',
-        'optimization' => 'media-optimization',
-        'selection' => 'media-selection',
-        'publishing' => 'telegram-publishing',
+        'extraction' => QueueName::MediaExtraction->value,
+        'download' => QueueName::MediaDownload->value,
+        'processing' => QueueName::MediaProcessing->value,
+        'image_analysis' => QueueName::ImageAnalysis->value,
+        'video_processing' => QueueName::VideoProcessing->value,
+        'optimization' => QueueName::MediaOptimization->value,
+        'selection' => QueueName::MediaSelection->value,
+        'publishing' => QueueName::TelegramPublishing->value,
     ],
 
     /*
@@ -53,14 +55,12 @@ return [
         'download_timeout_seconds' => 20,
         'download_connect_timeout_seconds' => 5,
 
-        // A self-identifying bot UA gets flat-out 403'd by several real
-        // sites with no real anti-bot challenge behind it — see
-        // BoundedHttpFetcher::browserHeaders(). Pin an exact Chrome version
-        // rather than chasing "latest" — consistency matters more than
-        // currency here.
+        // A clear server-side default. Source fetch_options.headers can
+        // override this per source when an upstream explicitly requires a
+        // different User-Agent; it cannot alter HTTP safety limits.
         'user_agent' => env(
             'HTTP_FETCH_USER_AGENT',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+            'imvnn-news-fetcher/1.0',
         ),
 
         'allowed_image_mime_types' => ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],

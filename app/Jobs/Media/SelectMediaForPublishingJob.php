@@ -14,6 +14,7 @@ use App\Models\TelegramChannel;
 use App\Services\Media\Selection\MediaSelectionService;
 use App\Services\Media\Variants\MediaVariantService;
 use App\Services\Telegram\CaptionComposerInterface;
+use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -66,6 +67,13 @@ class SelectMediaForPublishingJob implements ShouldQueue
             context: ['type' => $plan->type->value, 'asset_count' => count($plan->assets)],
         );
 
+        PipelineLogger::info('media.selection_completed', [
+            'news_item_id' => $newsItem->id,
+            'telegram_channel_id' => $channel->id,
+            'post_media_type' => $plan->type->value,
+            'asset_count' => count($plan->assets),
+        ]);
+
         if ($plan->type === PostMediaType::None) {
             PublishToTelegramJob::dispatch($channel->id, $newsItem->id, PostMediaType::None, [], $caption, null);
 
@@ -84,10 +92,25 @@ class SelectMediaForPublishingJob implements ShouldQueue
 
     public function failed(Throwable $exception): void
     {
+        $reason = PipelineLogger::exceptionMessage($exception);
+
+        // PublishNextReadyNewsItemJob claims an item before dispatching this
+        // job. Once all selection retries are exhausted, release that claim
+        // so the scheduler can try again on its normal paced cadence instead
+        // of leaving the article permanently stranded at publish_queued_at.
+        NewsItem::whereKey($this->newsItemId)
+            ->whereNull('telegram_published_at')
+            ->update(['publish_queued_at' => null]);
+
         MediaProcessingLog::record(
             ProcessingStage::Selection, ProcessingLogStatus::Failed,
             newsItemId: $this->newsItemId,
-            message: $exception->getMessage(),
+            message: $reason,
         );
+
+        PipelineLogger::exception('media.selection_failed', $exception, [
+            'news_item_id' => $this->newsItemId,
+            'telegram_channel_id' => $this->telegramChannelId,
+        ]);
     }
 }
