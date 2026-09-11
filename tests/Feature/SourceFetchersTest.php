@@ -17,6 +17,7 @@ use App\Services\News\HtmlCrawlSourceFetcher;
 use App\Services\News\NewsIngestionService;
 use App\Services\News\NewsSourceFetcherManager;
 use App\Services\News\RssSourceFetcher;
+use App\Services\News\TopicPolicy;
 use Carbon\CarbonImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
@@ -182,9 +183,10 @@ class SourceFetchersTest extends TestCase
             $this->boundedFetcher([new Response(403)]),
             new ArticleContentExtractor,
             $analyzer,
-            new AiRelevanceFilter,
+            new AiRelevanceFilter(new TopicPolicy),
             new UrlNormalizer,
             new FreshnessPolicy,
+            new TopicPolicy,
         );
 
         $newsItem = $service->ingest($source, new RawArticleCandidate(

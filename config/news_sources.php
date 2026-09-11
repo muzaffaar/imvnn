@@ -123,6 +123,22 @@ return [
         'ai model', 'ai agent', 'ai system', 'ai startup', 'ai chip', 'ai regulation',
         'gpt', 'chatgpt', 'openai', 'anthropic', 'claude', 'gemini', 'copilot',
         'midjourney', 'stable diffusion', 'hugging face', 'deepmind', 'nvidia ai',
+
+        // Machine learning, beyond the bare "machine learning" phrase.
+        'ml', 'mlops', 'reinforcement learning', 'supervised learning',
+        'unsupervised learning', 'self-supervised', 'self supervised', 'transfer learning',
+        'federated learning', 'fine-tuning', 'fine tuning', 'training run', 'inference',
+        'embedding', 'embeddings', 'diffusion model', 'vision model',
+        'computer vision', 'natural language processing', 'nlp',
+        'speech recognition', 'benchmark', 'dataset', 'gpu cluster', 'tpu',
+
+        // Robotics. None of these were covered before, so robotics stories
+        // from the robotics feeds were being dropped by the keyword gate.
+        'robot', 'robots', 'robotic', 'robotics', 'humanoid', 'cobot',
+        'autonomous vehicle', 'self-driving', 'self driving', 'drone', 'drones', 'uav',
+        'manipulation', 'actuator', 'lidar', 'slam', 'teleoperation',
+        'exoskeleton', 'quadruped', 'swarm robotics', 'embodied ai',
+        'robot learning', 'motion planning', 'warehouse automation',
     ],
 
     /*
@@ -179,6 +195,38 @@ return [
     'freshness' => [
         'only_today' => env('NEWS_ONLY_TODAY', true),
         'timezone' => env('NEWS_DAY_TIMEZONE', 'Asia/Tashkent'),
+
+        // Rolling lookback, in hours, which takes precedence over
+        // `only_today` when set above zero: an article is fresh if it was
+        // published within this many hours, regardless of calendar day.
+        //
+        // `only_today` is the right production policy but a poor development
+        // one: measured against the live feeds, it dropped 200 of 273
+        // candidates in a single fetch, because a feed's newest 20 items
+        // routinely stretch back weeks. A lookback window keeps the same
+        // "never post something stale" guarantee while leaving enough
+        // material to exercise the pipeline end to end.
+        //
+        // Leave NEWS_MAX_AGE_HOURS unset to fall back to `only_today`.
+        'max_age_hours' => env('NEWS_MAX_AGE_HOURS'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Topic filter — AI, ML and Robotics
+    |--------------------------------------------------------------------------
+    |
+    | Both topic gates at once: the `ai_keywords` prefilter above AND the AI
+    | analyzer's own is_ai_related verdict (see AiArticleAnalyzer). With this
+    | off, every candidate passes on topic, and only freshness and
+    | deduplication decide what gets ingested — the "catch everything"
+    | setting for bringing a channel up. Turn it on to restrict the channel
+    | to AI, machine learning and robotics.
+    |
+    | See App\Services\News\TopicPolicy.
+    */
+    'topic_filter' => [
+        'enabled' => env('NEWS_TOPIC_FILTER_ENABLED', true),
     ],
 
     /*

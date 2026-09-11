@@ -70,11 +70,19 @@ see the pipeline diagram in `docs/MEDIA_ARCHITECTURE.md`. Run workers per
 queue pool, e.g.:
 
 ```
-php artisan queue:work --queue=news-fetch,news-parse,media-extraction,media-download,image-analysis,media-optimization,media-selection
+php artisan queue:work --queue=news-fetch,news-parse,media-extraction,media-download,media-processing,image-analysis,media-optimization,media-selection
 php artisan queue:work --queue=video-processing          # isolated, keep separate
 php artisan queue:work --queue=telegram-publishing
 php artisan schedule:work                                 # drives the periodic news:fetch
 ```
+
+All four have to be running for the channel to post. The first pool includes
+`media-selection`, which is where the publishing scheduler's own chain lives —
+without a worker on it the chain stops dead and nothing is published, even
+with a full backlog of ready articles and no failed jobs to show for it.
+`App\Enums\QueueName::workerPools()` is the source of truth for this list;
+`deploy/supervisor/imvnn.conf` runs the same four under Supervisor in
+production.
 
 **If you edit any PHP file while these are running, restart them** —
 long-running `queue:work`/`schedule:work` processes cache code in memory
@@ -89,10 +97,48 @@ php artisan publishing:start {channel_id}
 ```
 
 From then on it runs itself: it publishes the single best ready-and-unpublished
-article, waits a random 15–120 minutes (configurable per channel via
-`rules.min_publish_interval_minutes`/`max_publish_interval_minutes`), then
-checks again — forever, even with several good articles backlogged. See
-`docs/MEDIA_ARCHITECTURE.md` "Publishing scheduler".
+article, waits, then checks again — forever, even with several good articles
+backlogged. See `docs/MEDIA_ARCHITECTURE.md` "Publishing scheduler".
+
+The cadence comes from the channel's `rules`, and the same command sets them,
+so a posting rate never has to be edited into the JSON column by hand:
+
+```
+php artisan publishing:start 1 --min-interval=5 --max-interval=5 --min-priority=0
+```
+
+- `--max-interval` is the baseline wait when nothing else is ready;
+  `--min-interval` is the floor it shrinks toward as a backlog builds. Equal
+  values mean a fixed interval.
+- `--min-priority` (0-1) is the news-priority score an article must reach to
+  be published at all. The default, 0.20, holds back routine updates — but an
+  article scoring zero is then held back *permanently*, not deferred. Use 0
+  for a channel that should publish everything eligible.
+
+Re-running the command is how the cadence is changed: it mints a new chain
+token, so any chain already running retires itself on its next pass instead of
+posting alongside the new one.
+
+## Development mode: catch everything, post often
+
+Four settings in `.env` turn the channel from "today's AI news, paced over
+hours" into "anything recent, every few minutes" — useful for seeing the whole
+pipeline move before narrowing what it carries:
+
+```
+NEWS_TOPIC_FILTER_ENABLED=false   # take any subject, not just AI/ML/Robotics
+NEWS_MAX_AGE_HOURS=72             # rolling window instead of "only today"
+PIPELINE_LOG_CANDIDATE_SKIPS=true # log why each candidate was dropped
+TELEGRAM_CAPTION_FALLBACK_ORIGINAL=true  # post untranslated rather than not at all
+```
+
+Why each matters is measured, not guessed — across one live fetch of all 15
+sources, 273 candidates became 4 articles: 200 were dropped by only-today and
+69 by the keyword filter. With the first two settings above, the same fetch
+produced 51. See `docs/NEWS_FETCHING.md` for both gates.
+
+To go back to production behaviour, set `NEWS_TOPIC_FILTER_ENABLED=true`,
+clear `NEWS_MAX_AGE_HOURS`, and raise the interval with `publishing:start`.
 
 ---
 

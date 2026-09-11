@@ -292,12 +292,56 @@ call is bounded on both sides, but nothing tracks cumulative spend:
   (similar to `MediaPipelineProgressTracker`'s cache-based counter) checked
   in `FallbackArticleAnalyzer::aiEnabled()` before ever calling the provider.
 
-## Freshness — only today's news
+## Topic filter — AI, ML and Robotics
 
-`FreshnessPolicy`, gated on `news_sources.freshness.only_today` (default on).
-An article is publishable only on the calendar day it was published, in the
-**audience's** timezone (`news_sources.freshness.timezone`, default
-`Asia/Tashkent`) — not UTC and not the publisher's.
+Both relevance gates above answer to one switch,
+`news_sources.topic_filter.enabled` (`NEWS_TOPIC_FILTER_ENABLED`, default on),
+read through `TopicPolicy`:
+
+- on — the keyword prefilter applies, and the analyzer's `is_ai_related`
+  verdict gates `NewsItem` creation. The channel carries AI, machine learning
+  and robotics only.
+- off — every candidate is on-topic, and only freshness and deduplication
+  decide what is ingested. This is the setting for bringing a channel up,
+  when you want to see the pipeline move before narrowing what it carries.
+
+One switch covers both gates on purpose. Relaxing only the keyword prefilter
+is the trap: the model still answers "not AI-related" and the same articles
+are dropped a stage later, after the article fetch and the model call have
+already been paid for.
+
+Measured against the live feeds, the keyword gate alone dropped 69 of 273
+candidates in a single fetch. Turning the topic filter off raised one run's
+ingestion from 4 articles to 51.
+
+Note the keyword list covers all three fields — robotics terms (`robot`,
+`humanoid`, `lidar`, `quadruped`, …) and ML terms (`reinforcement learning`,
+`computer vision`, `mlops`, …) alongside the AI ones. Keywords are
+`preg_quote`'d, so they are literal phrases: write both `self-driving` and
+`self driving` rather than a character class.
+
+## Freshness — only today's news, or a rolling window
+
+`FreshnessPolicy`. Two policies, and the rolling one wins when set:
+
+- **`news_sources.freshness.max_age_hours`** (`NEWS_MAX_AGE_HOURS`, unset by
+  default) — an article is fresh if published within that many hours,
+  regardless of calendar day. The window also stays open one hour past now,
+  because publishers routinely stamp an article a few minutes ahead and
+  clocks drift; without that margin the freshest news of all is the one thing
+  rejected. A value of zero, empty or non-numeric means "unset" rather than
+  "nothing is ever fresh", so a malformed env value cannot silence the
+  channel.
+- **`news_sources.freshness.only_today`** (default on) — an article is
+  publishable only on the calendar day it was published, in the
+  **audience's** timezone (`news_sources.freshness.timezone`, default
+  `Asia/Tashkent`) — not UTC and not the publisher's.
+
+Only-today is the right production policy and a poor development one: across
+a single live fetch it dropped 200 of 273 candidates, because a feed's newest
+20 items routinely stretch back weeks. That starves a fast posting cadence of
+anything to post. A lookback window keeps the same "never post something
+stale" guarantee while leaving enough material to exercise the pipeline.
 
 This exists because feeds carry far more history than their item count
 suggests: the newest 20 items of a low-volume company blog can reach back a

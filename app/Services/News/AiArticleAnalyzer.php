@@ -62,8 +62,9 @@ class AiArticleAnalyzer implements ArticleAnalyzerInterface
             You are analyzing a news article for an AI-news aggregation pipeline.
 
             1. Determine whether the article is substantively about artificial
-               intelligence (AI research, models, companies, products, tools,
-               regulation, or applications) — not just a passing mention.
+               intelligence, machine learning, or robotics — research, models,
+               companies, products, tools, regulation, or applications in any
+               of those three fields — and not just a passing mention.
             2. Produce a clean article title.
             3. Produce a concise, neutral summary of the article's actual content
                (a few sentences), in your own words rather than copied verbatim.

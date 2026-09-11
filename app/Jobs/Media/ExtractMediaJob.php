@@ -187,5 +187,18 @@ class ExtractMediaJob implements ShouldQueue
         );
 
         PipelineLogger::exception('media.extraction_failed', $exception, ['news_item_id' => $this->newsItemId]);
+
+        // Extraction is where media comes from, not where the article does.
+        // The publishing scheduler only ever considers items whose media
+        // analysis has completed, so stopping here would strand a perfectly
+        // publishable article forever — silently, with no failed job left to
+        // retry, because this handler runs after the last attempt. Carry on to
+        // analysis instead: with no usable media the article posts as text,
+        // which is the whole reason PostMediaType::None exists.
+        AnalyzeMediaForNewsItemJob::dispatch($this->newsItemId);
+
+        PipelineLogger::warning('media.extraction_failed_text_only_continuation', [
+            'news_item_id' => $this->newsItemId,
+        ]);
     }
 }

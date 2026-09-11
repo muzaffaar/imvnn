@@ -11,6 +11,10 @@ use Illuminate\Support\Facades\Cache;
  * finishes — regardless of whether that job succeeded or exhausted its
  * retries and failed.
  *
+ * Biased toward firing rather than withholding: a duplicate analysis pass
+ * only repeats idempotent scoring work, while a missed one leaves the article
+ * invisible to the publishing scheduler forever.
+ *
  * Deliberately NOT implemented with Bus::batch(): a batch forces every job
  * in it onto one queue (the batch's own queue option, falling back to the
  * connection default) and ignores each job's individual onQueue() call —
@@ -43,9 +47,19 @@ class MediaPipelineProgressTracker
         $key = $this->key($newsItemId);
 
         if (! Cache::has($key)) {
-            PipelineLogger::warning('media.progress_state_missing', ['news_item_id' => $newsItemId]);
+            // The counter is the only record of how much work is outstanding,
+            // and it lives in a cache: a two-hour expiry, a flushed store or a
+            // restarted Redis all erase it. Reporting "not finished" then
+            // means the analysis job is never dispatched and the article can
+            // never be published, with nothing failed to retry. Treat a lost
+            // counter as the last job instead — analysis is idempotent and
+            // cheap to repeat, whereas a stranded article is invisible.
+            PipelineLogger::warning('media.progress_state_missing', [
+                'news_item_id' => $newsItemId,
+                'treated_as_final' => true,
+            ]);
 
-            return false;
+            return true;
         }
 
         $remaining = Cache::decrement($key);

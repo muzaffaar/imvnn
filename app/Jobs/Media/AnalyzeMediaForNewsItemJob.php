@@ -93,5 +93,22 @@ class AnalyzeMediaForNewsItemJob implements ShouldQueue
         );
 
         PipelineLogger::exception('media.analysis_failed', $exception, ['news_item_id' => $this->newsItemId]);
+
+        // Same reasoning as ExtractMediaJob::failed(): this timestamp is the
+        // only thing that makes an article visible to the publishing
+        // scheduler, so leaving it unset after the final retry strands the
+        // article permanently. Scoring media is an enhancement; an article
+        // with unscored or unusable media still publishes, as text or with
+        // whatever passed the selection thresholds. Only set it if publishing
+        // has not already happened, and never overwrite an existing value.
+        $marked = NewsItem::whereKey($this->newsItemId)
+            ->whereNull('media_analysis_completed_at')
+            ->update(['media_analysis_completed_at' => now()]);
+
+        if ($marked > 0) {
+            PipelineLogger::warning('media.analysis_failed_candidate_released', [
+                'news_item_id' => $this->newsItemId,
+            ]);
+        }
     }
 }

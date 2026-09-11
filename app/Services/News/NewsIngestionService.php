@@ -27,6 +27,7 @@ class NewsIngestionService
         private readonly AiRelevanceFilter $prefilter,
         private readonly UrlNormalizer $urlNormalizer,
         private readonly FreshnessPolicy $freshness,
+        private readonly TopicPolicy $topicPolicy,
     ) {}
 
     /** @return NewsItem|null null if the candidate was skipped (irrelevant, duplicate, or unfetchable) */
@@ -113,7 +114,11 @@ class NewsIngestionService
             return null; // nothing usable to publish under
         }
 
-        if (! $analysis->isAiRelated) {
+        // The model still judges relevance on every call, but its verdict only
+        // decides anything while the topic filter is on. Honouring it anyway
+        // would undo the bypass one stage late, after the fetch and the model
+        // call had already been paid for.
+        if ($this->topicPolicy->enabled() && ! $analysis->isAiRelated) {
             $this->logSkip($source, $candidate, 'analysis_not_ai_related');
 
             return null;
