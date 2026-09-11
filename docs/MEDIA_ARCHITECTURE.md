@@ -461,6 +461,30 @@ no deploy) via `computeDelaySeconds()`:
 - **No other candidate waiting** (`backlogCount == 0`): the delay is exactly
   `max_publish_interval_minutes` (default 30 minutes) — a steady drip when
   supply is scarce, not randomized, since there's nothing to rush for.
+### Pacing to the end of the day
+
+Under "only today's news" an article that misses midnight is abandoned, so the
+interval is not just a politeness setting — it decides how much of the day's news
+is published at all. At a fixed five minutes, a chain that reaches 23:30 with ten
+articles waiting posts six and loses four, and the channel looks like it simply
+had less news.
+
+So with a backlog the ceiling is normally the **deadline**: the seconds left in
+today's freshness window divided by `backlog + 1`. The `+ 1` leaves one interval
+in hand rather than landing the last post on the stroke of midnight, where a slow
+media pipeline would lose it. The delay is still random within
+[floor, ceiling], so the cadence never becomes a robotic beat, and because every
+draw is at or below the ceiling the schedule still lands.
+
+Arrival rate is deliberately **not** measured separately. Articles arriving
+faster is precisely what makes the backlog grow, and the backlog is already an
+input; a news-per-hour figure would be a second, laggier estimate of the same
+thing, and the two could disagree.
+
+Where there is no shared deadline — the rolling-lookback freshness policy, or
+freshness switched off — nothing expires at midnight, and the older
+backlog-saturation rule governs instead:
+
 - **Backlog present**: the delay is random between `min_publish_interval_minutes`
   (default 15) and a ceiling that shrinks from the 30-minute baseline down toward
   15 minutes as the backlog grows, reaching the 15-minute floor once the

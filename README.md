@@ -111,8 +111,30 @@ php artisan publishing:start 1 --min-interval=5 --max-interval=5 --min-priority=
 ```
 
 - `--max-interval` is the baseline wait when nothing else is ready;
-  `--min-interval` is the floor it shrinks toward as a backlog builds. Equal
-  values mean a fixed interval.
+  `--min-interval` is the floor it shrinks toward as a backlog builds. **Equal
+  values mean a fixed interval and switch the adaptive pacing off**, since there
+  is no range left to choose from — give the two some distance apart.
+
+  Between them, the interval is chosen by dividing the time left in today's
+  freshness window across the articles still waiting, so the channel speeds up
+  as the day runs out. That matters because an article that misses midnight is
+  abandoned, not carried over: at a fixed five minutes, a chain that reaches
+  23:30 with ten articles waiting posts six and silently loses four. With
+  `--min-interval=3 --max-interval=45`:
+
+  | Time | Waiting | Interval chosen |
+  |---|---|---|
+  | 10:00 | 2 | 45 min |
+  | 18:30 | 10 | 30 min |
+  | 22:00 | 25 | 4.6 min |
+  | 23:30 | 10 | 3 min (floor) |
+
+  Arrival rate needs no separate measurement: more news arriving is exactly what
+  makes the backlog grow. If even the floor cannot clear the backlog in time, the
+  surplus still expires at midnight and the scheduler logs
+  `telegram.scheduler_backlog_will_expire` with the numbers, rather than
+  dropping them silently. Set the channel rule `pace_to_end_of_day` to false to
+  keep an even cadence instead.
 - `--min-priority` (0-1) is the news-priority score an article must reach to
   be published at all. The default, 0.20, holds back routine updates — but an
   article scoring zero is then held back *permanently*, not deferred. Use 0

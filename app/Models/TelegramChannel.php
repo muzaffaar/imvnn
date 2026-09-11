@@ -39,6 +39,12 @@ class TelegramChannel extends Model
             'max_publish_interval_minutes' => 30,
             'publish_backlog_saturation_count' => 5,
 
+            // Spread the day's remaining articles across the time left before
+            // the freshness window closes, so the ones that would otherwise
+            // expire unposted at midnight go out instead. Turn off for a
+            // channel that values an even cadence over publishing everything.
+            'pace_to_end_of_day' => true,
+
             'max_images' => 4,
             'prefer_video' => true,
             'allow_media_group' => true,
