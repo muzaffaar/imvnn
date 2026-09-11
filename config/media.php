@@ -164,9 +164,8 @@ return [
     |--------------------------------------------------------------------------
     |
     | Optional: AiCaptionComposer writes the actual post text — a short,
-    | strictly Uzbek summary in whatever tone fits the story,
-    | no links — instead of the free PlainCaptionComposer (title + excerpt,
-    | original language, no translation). Disabled automatically if
+    | strictly Uzbek summary in simple language. A source link is appended by
+    | the application to both AI and plain captions. Disabled automatically if
     | AI_API_KEY is empty. Any provider failure falls back to
     | PlainCaptionComposer for that post rather than failing the job — see
     | FallbackCaptionComposer.
@@ -176,10 +175,6 @@ return [
     | docs/NEWS_FETCHING.md "Token/cost limits".
     */
     'telegram_caption' => [
-        // Timezone the post's date/time header is rendered in — the channel's
-        // audience's local time, not the app's UTC storage timezone.
-        'display_timezone' => env('TELEGRAM_DISPLAY_TIMEZONE', 'Asia/Tashkent'),
-
         // Languages each post is written in, in order. Drives the AI-provider
         // response schema and the assembled caption, so adding or removing a
         // language is a config change rather than a code change. `flag` is
@@ -192,9 +187,6 @@ return [
         'languages' => [
             ['key' => 'uzbek', 'name' => 'Uzbek', 'flag' => null, 'script' => 'Latin'],
         ],
-
-        // One short witty line reacting to the story, under the summary.
-        'humor_line' => env('TELEGRAM_CAPTION_HUMOR', true),
 
         // When the AI provider can't produce a caption, the only fallback is the
         // article's own words — i.e. the source's language, usually English.

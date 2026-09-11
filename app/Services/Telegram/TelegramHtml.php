@@ -15,4 +15,10 @@ class TelegramHtml
     {
         return htmlspecialchars($text, ENT_NOQUOTES, 'UTF-8');
     }
+
+    /** Escapes a value placed inside Telegram HTML's quoted href attribute. */
+    public static function escapeAttribute(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+    }
 }

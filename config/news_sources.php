@@ -157,8 +157,9 @@ return [
         'max_items_per_feed_fetch' => 20,
     ],
 
-    // How often the scheduler polls every active source (see routes/console.php).
-    'fetch_interval_minutes' => 30,
+    // Five-minute polling keeps same-day news close to its publication time.
+    // Conditional RSS/HTTP validators avoid downloading unchanged sources.
+    'fetch_interval_minutes' => env('NEWS_FETCH_INTERVAL_MINUTES', 5),
 
     /*
     |--------------------------------------------------------------------------
@@ -178,6 +179,28 @@ return [
     'freshness' => [
         'only_today' => env('NEWS_ONLY_TODAY', true),
         'timezone' => env('NEWS_DAY_TIMEZONE', 'Asia/Tashkent'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Publishing priority
+    |--------------------------------------------------------------------------
+    |
+    | This is an explainable ranking aid, not sensational-text generation.
+    | It ranks material launches, breakthroughs, safety events and major
+    | business/policy changes before routine posts.
+    | `min_news_priority_score` defaults to 0.20, filtering routine updates.
+    | Lower it to zero for a channel that should publish all eligible news.
+    */
+    'publication_priority' => [
+        'candidate_limit' => 100,
+        'signals' => [
+            ['pattern' => '/\\b(breaking|urgent|just in|today)\\b/u', 'weight' => 0.30],
+            ['pattern' => '/\\b(world[ -]?first|first ever|record[- ]breaking|unprecedented|breakthrough)\\b/u', 'weight' => 0.35],
+            ['pattern' => '/\\b(launch(?:es|ed)?|release[ds]?|introduc(?:es|ed|ing)|general availability)\\b/u', 'weight' => 0.20],
+            ['pattern' => '/\\b(security|vulnerability|breach|safety|ban(?:ned)?|regulation|lawsuit)\\b/u', 'weight' => 0.25],
+            ['pattern' => '/\\b(acquisition|funding|investment|partnership|billion)\\b/u', 'weight' => 0.15],
+        ],
     ],
 
     /*

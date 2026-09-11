@@ -90,10 +90,9 @@ The prompt still requests JSON and the application validates it. Existing
 deployments that only use `GEMINI_*` variables continue to work; migrate to
 `AI_*` when ready.
 
-Keep the server clock on **UTC**. Timestamps are stored in UTC and rendered
-per-channel via `media.telegram_caption.display_timezone`; changing the
-system timezone does not change what readers see, but it does change what
-"today" means to `FreshnessPolicy`.
+Keep the server clock on **UTC**. Timestamps are stored in UTC; they are used
+for freshness decisions but are not shown in Telegram post headers. Changing
+the system timezone does change what "today" means to `FreshnessPolicy`.
 
 ```bash
 php artisan migrate --force
@@ -179,7 +178,8 @@ posting in parallel.
 
 The supplied Supervisor configuration includes an `imvnn-scheduler` program
 that runs `php artisan schedule:work` continuously. It drives `news:fetch`
-every 30 minutes (`news_sources.fetch_interval_minutes`) and restarts after a
+every five minutes by default (`NEWS_FETCH_INTERVAL_MINUTES`, backed by
+`news_sources.fetch_interval_minutes`) and restarts after a
 crash, just like the queue workers.
 
 Do **not** add a `schedule:run` cron entry when using this configuration, or

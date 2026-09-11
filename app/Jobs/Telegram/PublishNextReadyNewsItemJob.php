@@ -7,6 +7,7 @@ use App\Jobs\Media\SelectMediaForPublishingJob;
 use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\News\FreshnessPolicy;
+use App\Services\News\NewsPriorityScorer;
 use App\Support\Observability\PipelineLogger;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -98,7 +99,7 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
                 return;
             }
 
-            $candidate = $this->pickBestCandidate();
+            $candidate = $this->pickBestCandidate($channel);
 
             if ($candidate && $this->claim($candidate)) {
                 SelectMediaForPublishingJob::dispatch($candidate->id, $channel->id);
@@ -106,6 +107,7 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
                     'telegram_channel_id' => $channel->id,
                     'news_item_id' => $candidate->id,
                     'best_quality_score' => $candidate->best_quality_score,
+                    'news_priority_score' => $candidate->news_priority_score,
                 ]);
             } elseif ($candidate) {
                 PipelineLogger::warning('telegram.scheduler_claim_lost', [
@@ -141,18 +143,42 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
         return $query;
     }
 
-    private function pickBestCandidate(): ?NewsItem
+    private function pickBestCandidate(TelegramChannel $channel): ?NewsItem
     {
-        return $this->eligibleQuery()
+        $priorityScorer = app(NewsPriorityScorer::class);
+        $minimumPriority = max(0.0, min(1.0, (float) $channel->rule('min_news_priority_score', 0.20)));
+
+        $candidates = $this->eligibleQuery()
             ->withMax(['mediaAssets as best_quality_score' => function ($query) {
                 $query->where('status', MediaStatus::Ready->value);
             }], 'quality_score')
-            // Text-only-eligible items (no usable media at all) have a NULL
-            // aggregate and rank behind anything with scored media, not ahead
-            // of it — Postgres sorts NULLs first by default on DESC.
-            ->orderByRaw('best_quality_score DESC NULLS LAST')
-            ->orderBy('media_analysis_completed_at')
-            ->first();
+            ->limit((int) config('news_sources.publication_priority.candidate_limit', 100))
+            ->get()
+            ->map(function (NewsItem $candidate) use ($priorityScorer): NewsItem {
+                $candidate->setAttribute('news_priority_score', $priorityScorer->score($candidate));
+
+                return $candidate;
+            })
+            ->filter(fn (NewsItem $candidate) => $candidate->news_priority_score >= $minimumPriority)
+            ->sort(function (NewsItem $left, NewsItem $right): int {
+                // A high-impact news signal comes first. Media quality is the
+                // tie-breaker; NULL ranks behind usable media. Older ready work
+                // then wins to avoid starvation among otherwise equal articles.
+                $priority = $right->news_priority_score <=> $left->news_priority_score;
+                if ($priority !== 0) {
+                    return $priority;
+                }
+
+                $quality = ($right->best_quality_score ?? -1) <=> ($left->best_quality_score ?? -1);
+                if ($quality !== 0) {
+                    return $quality;
+                }
+
+                return ($left->media_analysis_completed_at?->getTimestamp() ?? PHP_INT_MAX)
+                    <=> ($right->media_analysis_completed_at?->getTimestamp() ?? PHP_INT_MAX);
+            });
+
+        return $candidates->first();
     }
 
     /** Atomic claim: true only for whichever concurrent scheduler run gets there first. */

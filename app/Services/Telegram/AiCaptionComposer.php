@@ -62,30 +62,10 @@ class AiCaptionComposer implements CaptionComposerInterface
         return CaptionBudget::assemble(
             PostHeader::render($newsItem),
             $sections,
-            $this->humorLine($response['funny_line'] ?? null, $languages[0] ?? []),
+            null,
             PostHeader::renderHashtags($response['hashtags'] ?? []),
             CaptionBudget::limitFor($plan),
         );
-    }
-
-    /**
-     * @param  array{key?: string, name?: string, flag?: ?string, script?: ?string}  $language
-     */
-    private function humorLine(mixed $funnyLine, array $language): ?string
-    {
-        if (! config('media.telegram_caption.humor_line', true) || ! is_string($funnyLine)) {
-            return null;
-        }
-
-        $line = $this->orNull($funnyLine);
-
-        if ($line === null
-            || ! CaptionText::matchesScript($line, $language['script'] ?? null)
-            || mb_strlen($line) > 160) {
-            return null;
-        }
-
-        return "<i>{$line}</i>";
     }
 
     /** @return list<array{key: string, name: string, flag: ?string}> */
@@ -110,7 +90,7 @@ class AiCaptionComposer implements CaptionComposerInterface
         $languageRequirement = $count === 1 && ($languages[0]['key'] ?? null) === 'uzbek'
             ? <<<'RULE'
                 Uzbek is mandatory. Write every generated field — the headline,
-                post body, funny_line, and hashtags — in standard Uzbek using the
+                post body and hashtags — in standard Uzbek using the
                 Latin alphabet. Do not write English or Russian, and do not use
                 Cyrillic. Translate ordinary terms into Uzbek. Keep an original
                 spelling only for proper names, brands, product names, acronyms,
@@ -128,8 +108,10 @@ class AiCaptionComposer implements CaptionComposerInterface
 
             Write {$postWord} (2-3 sentences, at most 320 characters each) that
             clearly and accurately summarize this story for a general audience,
-            in: {$languageList}. {$languageRequirement} Give each one a short, punchy headline (under 70
-            characters) in its own language. {$sharedNote}
+            in: {$languageList}. Use short, ordinary words. Explain any
+            unavoidable technical term in simple language. {$languageRequirement}
+            Give each one a short, clear headline (under 70 characters) in its
+            own language. {$sharedNote}
 
             Match whatever tone genuinely fits the story — formal, dramatic,
             warm, or serious — rather than forcing one fixed style. At most two
@@ -141,19 +123,12 @@ class AiCaptionComposer implements CaptionComposerInterface
             the article is thin, write less rather than filling the gap.
             Copy names, numbers and dates exactly as they appear.
 
-            Also write `funny_line`: ONE short witty remark (under 140
-            characters) reacting to this story, in {$languageList}. Dry,
-            observational humour that a reader would smile at — not a pun for
-            its own sake, not sarcasm about real people being harmed, and
-            never at the expense of the facts. If nothing genuinely funny
-            comes to mind for this story, return an empty string rather than
-            forcing a joke.
-
             Also pick 2-4 topical hashtag words (no "#", no spaces, letters and
-            digits only) — e.g. the model, company, or field the story is about.
+            digits only, all lowercase) — e.g. the model, company, or field the
+            story is about.
 
-            Do NOT include any links, URLs, or phrases meaning "read more" /
-            "batafsil" / "подробнее". Do not mention the source's name — it is
+            Do not add any URL yourself. The application always adds the direct
+            source link separately. Do not mention the source's name — it is
             added separately.
             PROMPT;
 
@@ -177,7 +152,6 @@ class AiCaptionComposer implements CaptionComposerInterface
             $properties[$language['key']] = ['type' => 'string'];
         }
 
-        $properties['funny_line'] = ['type' => 'string'];
         $properties['hashtags'] = ['type' => 'array', 'items' => ['type' => 'string']];
 
         return [

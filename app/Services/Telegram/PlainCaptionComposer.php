@@ -9,8 +9,8 @@ use Illuminate\Support\Str;
 /**
  * Free, deterministic, always-succeeds fallback: title + excerpt, in
  * whatever language the article/analysis produced (not translated — that
- * needs an AI provider, see AiCaptionComposer). No links: the post is meant to
- * stand on its own as a summary, not point back to a source URL.
+ * needs an AI provider, see AiCaptionComposer). PostHeader always supplies
+ * the source link so this fallback remains traceable too.
  */
 class PlainCaptionComposer implements CaptionComposerInterface
 {

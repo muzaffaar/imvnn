@@ -43,6 +43,9 @@ class TelegramChannel extends Model
             'prefer_video' => true,
             'allow_media_group' => true,
             'min_quality_score' => 0.35,
+            // Routine updates score zero. Keep only stories with at least one
+            // material impact signal unless a channel deliberately overrides it.
+            'min_news_priority_score' => 0.20,
         ], $overrides);
     }
 }

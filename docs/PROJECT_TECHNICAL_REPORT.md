@@ -31,7 +31,7 @@ currently no-op bindings.
 | Laravel | CLI/queue-centric app; web route returns welcome | routes/web.php, routes/console.php |
 | Database | Models/migrations use PostgreSQL-compatible JSON/JSONB; deployment docs specify PostgreSQL | database/migrations, docs/DEPLOYMENT.md |
 | Queue | Laravel database queue by default; names centralized | config/queue.php, app/Enums/QueueName.php |
-| Scheduler | news:fetch every 30 min; queue health every five min | routes/console.php |
+| Scheduler | news:fetch every five min by default; queue health every five min | routes/console.php, config/news_sources.php |
 | Runtime | Supervisor pipeline, isolated video, Telegram, scheduler processes | deploy/supervisor/imvnn.conf |
 | HTTP | Bounded Guzzle fetcher with limits, redirects, validators, source headers | app/Services/Http/BoundedHttpFetcher.php |
 | AI | Gemini native or OpenAI-compatible structured output | app/Services/Ai, app/Providers/AiServiceProvider.php |
@@ -141,10 +141,11 @@ budget, or evaluation corpus exists.
 ### Caption LLM
 
 AiCaptionComposer sends stored title, content capped at 4,000 chars, and media
-type. It requests Uzbek Latin-script headline/body, optional humor, and 2–4
-hashtags; it prohibits unsupported facts and links. It validates script/length,
-escapes HTML, and fits 1,024 Telegram caption chars. Defaults: temperature 0.7,
-400 output tokens, 20 seconds.
+type. It requests Uzbek Latin-script headline/body in short, ordinary language
+and 2–4 lowercase hashtags; no humor field is requested. PostHeader appends a
+validated direct original-article link and intentionally omits publication date
+and time. It validates script/length, escapes HTML, and fits 1,024 Telegram
+caption chars. Defaults: temperature 0.7, 400 output tokens, 20 seconds.
 
 FallbackCaptionComposer only uses PlainCaptionComposer after LLM failure when
 TELEGRAM_CAPTION_FALLBACK_ORIGINAL=true. Default false avoids publishing likely
@@ -153,8 +154,13 @@ fetched candidate.
 
 ## 6. Relevance and Ranking
 
-Article relevance is acceptance/rejection, not an article-importance model.
-Source reliability contributes to media quality only.
+Article relevance is acceptance/rejection. At publishing time,
+NewsPriorityScorer applies transparent title/body signals for urgent updates,
+breakthroughs, launches, safety/security, and material business or policy
+changes. It ranks these ahead of routine eligible news without generating
+sensational language. `min_news_priority_score` defaults to `0.20`, so routine
+updates are filtered; lower it to `0.0` for a channel that should publish all
+otherwise eligible news. Source reliability contributes to media quality only.
 
 MediaRelevanceScorer weights keyword overlap 0.4, position 0.3, extractor trust
 0.3. Up to three assets with pivot relevance at least 0.35 reach the current
@@ -165,8 +171,8 @@ ratio 10%.
 
 PublishNextReadyNewsItemJob::eligibleQuery() requires
 media_analysis_completed_at, null publish_queued_at, null telegram_published_at,
-and current-day freshness when enabled. It orders maximum ready-media quality
-descending (null last), then oldest analysis. Stored articles can remain
+and current-day freshness when enabled. It orders priority score, maximum
+ready-media quality (null last), then oldest analysis. Stored articles can remain
 unselected because not analyzed, stale, claimed/published, lower ranked,
 channel-inactive, or absent scheduler chain.
 
@@ -412,4 +418,3 @@ work.
 - database/migrations; routes/console.php; routes/web.php;
   deploy/supervisor/imvnn.conf
 - tests/Feature, tests/Unit, docs
-
