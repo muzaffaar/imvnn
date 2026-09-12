@@ -4,6 +4,7 @@ namespace App\Services\Media\Selection;
 
 use App\DTOs\PostMediaPlan;
 use App\Enums\MediaProvider;
+use App\Enums\MediaStatus;
 use App\Enums\MediaType;
 use App\Enums\PostMediaType;
 use App\Models\MediaAsset;
@@ -11,6 +12,7 @@ use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\Media\Deduplication\RenditionKeyBuilder;
 use App\Services\Media\ImageDimensionProbe;
+use App\Services\Media\ImageFingerprintProbe;
 use App\Services\Media\Scoring\ImageRoleClassifier;
 use App\Services\Media\Scoring\MediaQualityScorer;
 use App\Services\Media\Scoring\TelegramCompatibilityChecker;
@@ -62,6 +64,7 @@ class MediaSelectionService
         private readonly RenditionKeyBuilder $renditionKeys,
         private readonly ImageDimensionProbe $dimensionProbe,
         private readonly ImageRoleClassifier $roleClassifier,
+        private readonly ImageFingerprintProbe $fingerprintProbe,
     ) {}
 
     public function selectForNewsItem(NewsItem $newsItem, TelegramChannel $channel): PostMediaPlan
@@ -93,13 +96,18 @@ class MediaSelectionService
         $usable = $this->probeAndRerank($toProbe);
 
         // Both passes again, now that dimensions are real: probing is what
-        // reveals a 200x200 avatar whose URL gave nothing away, and what
-        // supplies the content hashes that catch renditions the URL heuristics
-        // missed.
+        // reveals a 200x200 avatar whose URL gave nothing away, and a 200x100
+        // sliver that only its aspect ratio condemns.
         $usable = $this->dropDuplicateRenditions($usable)
             ->reject(fn (MediaAsset $asset) => $this->isNonContentImage($asset))
             ->filter(fn (MediaAsset $asset) => $this->contextualScore($asset) >= $minQuality)
             ->values();
+
+        // Last and strongest pass. Everything above argues from filenames and
+        // dimensions, neither of which can tell that one photograph was
+        // published under two unrelated names. Only the pixels can, and this
+        // is what keeps one picture out of two album slots.
+        $usable = $this->dropPerceptualDuplicates($usable);
 
         if ($usable->isEmpty()) {
             PipelineLogger::info('media.selection_no_usable_asset', [
@@ -173,7 +181,8 @@ class MediaSelectionService
      * One picture, one slot. Assets are already sorted best-first, so
      * `unique()` keeps the highest-scoring rendition of each image and drops
      * the rest — see RenditionKeyBuilder for why URL/content hashes alone
-     * don't catch these.
+     * don't catch these. Filename evidence only; `dropPerceptualDuplicates`
+     * is what settles the cases a filename cannot.
      *
      * @param  Collection<int, MediaAsset>  $ranked
      * @return Collection<int, MediaAsset>
@@ -186,9 +195,108 @@ class MediaSelectionService
     }
 
     /**
+     * Fingerprints the leading candidates, then collapses whatever the pixels
+     * reveal to be one picture.
+     *
+     * Runs last, and only over the finalists, for two reasons. Every cheaper
+     * signal has already had its turn, so the list arriving here is short and
+     * mostly distinct. And a fingerprint costs a bounded HTTP read, which is
+     * only worth spending on an image that can still reach the album.
+     *
+     * The losing copy is recorded as a resolved duplicate rather than merely
+     * skipped. Without that, the same pair is re-fetched and re-compared for
+     * every later article citing either URL; with it, `isUsable()` drops the
+     * loser before selection even begins, and Level 1/2 detection stops
+     * offering it as a canonical.
+     *
+     * @param  Collection<int, MediaAsset>  $ranked
+     * @return Collection<int, MediaAsset>
+     */
+    private function dropPerceptualDuplicates(Collection $ranked): Collection
+    {
+        $candidates = $ranked->take((int) config('media.deduplication.fingerprint_candidates', 8));
+        $budgetSeconds = (float) config('media.deduplication.fingerprint_budget_seconds', 25);
+        $startedAt = microtime(true);
+        $attempted = 0;
+
+        foreach ($candidates as $asset) {
+            if (microtime(true) - $startedAt >= $budgetSeconds) {
+                PipelineLogger::warning('media.fingerprint_budget_exhausted', [
+                    'attempted' => $attempted,
+                    'unfingerprinted' => $candidates->count() - $attempted,
+                    'budget_seconds' => $budgetSeconds,
+                ]);
+
+                break;
+            }
+
+            $attempted++;
+
+            if ($asset->type->isVisual()) {
+                $this->fingerprintProbe->fingerprint($asset);
+            }
+        }
+
+        // Fingerprinting reads the complete file, which corrects dimensions the
+        // 64 KB header probe got wrong — so the ranking that decides which copy
+        // of a picture survives has to be recomputed from the corrected values,
+        // not inherited from the guess.
+        $ranked = $ranked
+            ->reject(fn (MediaAsset $asset) => $this->hasUnusableDimensions($asset))
+            ->sortByDesc(fn (MediaAsset $asset) => $this->contextualScore($asset))
+            ->values();
+
+        $survivors = collect();
+
+        foreach ($this->renditionGroups($ranked) as $group) {
+            /** @var MediaAsset $keeper */
+            $keeper = $group->first();
+            $survivors->push($keeper);
+
+            foreach ($group->skip(1) as $duplicate) {
+                $this->recordResolvedDuplicate($duplicate, $keeper);
+            }
+        }
+
+        return $survivors->values();
+    }
+
+    private function recordResolvedDuplicate(MediaAsset $duplicate, MediaAsset $keeper): void
+    {
+        $matchedOnPixels = (bool) ($duplicate->perceptual_hash && $keeper->perceptual_hash);
+
+        PipelineLogger::info('media.selection_duplicate_dropped', [
+            'media_asset_id' => $duplicate->id,
+            'duplicate_of_id' => $keeper->id,
+            'duplicate_url' => PipelineLogger::url($duplicate->original_url),
+            'kept_url' => PipelineLogger::url($keeper->original_url),
+            'matched_on' => $matchedOnPixels ? 'perceptual_hash' : 'rendition_key',
+        ]);
+
+        // Only a pixel-level match is certain enough to persist. A rendition
+        // key is a filename guess: good enough to pick one copy for this post,
+        // not good enough to mark a row duplicate for every future one.
+        if (! $matchedOnPixels || $duplicate->duplicate_of_id || $duplicate->id === $keeper->id) {
+            return;
+        }
+
+        // Re-parenting rows that already point at this asset is not this
+        // method's call to make, so a canonical is left alone.
+        if ($duplicate->duplicates()->exists()) {
+            return;
+        }
+
+        $duplicate->update([
+            'status' => MediaStatus::Duplicate,
+            'duplicate_of_id' => $keeper->id,
+            'processed_at' => now(),
+        ]);
+    }
+
+    /**
      * Rank-ordered groups of renditions of the same picture.
      *
-     * Grouped with `isSamePicture` rather than by exact key, because a CMS can
+     * Grouped with `isSamePictureByKeys` rather than one exact key, because a CMS can
      * truncate one image's filename differently per rendition — so two keys
      * that differ by a character still name one picture. A plain `groupBy` kept
      * both and the album showed it twice.
@@ -198,29 +306,28 @@ class MediaSelectionService
      */
     private function renditionGroups(Collection $ranked): Collection
     {
-        /** @var list<array{key: string, assets: Collection<int, MediaAsset>}> $groups */
+        /** @var list<array{keys: list<string>, assets: Collection<int, MediaAsset>}> $groups */
         $groups = [];
 
         foreach ($ranked as $asset) {
-            $key = $this->renditionKeys->keyFor($asset);
+            $keys = $this->renditionKeys->keysFor($asset);
             $matched = false;
 
             foreach ($groups as $index => $group) {
-                if ($this->renditionKeys->isSamePicture($group['key'], $key)) {
+                if ($this->renditionKeys->isSamePictureByKeys($group['keys'], $keys)) {
                     $groups[$index]['assets']->push($asset);
-                    // Keep the shorter key as the group's identity: a truncation
-                    // of a truncation still matches the shortest stem, while the
-                    // longest would stop matching further truncations.
-                    if (mb_strlen($key) < mb_strlen($group['key'])) {
-                        $groups[$index]['key'] = $key;
-                    }
+                    // A group keeps every key its members contributed, so a
+                    // truncation of a truncation still matches the shortest
+                    // stem the group has seen, and a perceptual hash learned
+                    // from one member becomes a way in for the next.
+                    $groups[$index]['keys'] = array_values(array_unique([...$group['keys'], ...$keys]));
                     $matched = true;
                     break;
                 }
             }
 
             if (! $matched) {
-                $groups[] = ['key' => $key, 'assets' => collect([$asset])];
+                $groups[] = ['keys' => $keys, 'assets' => collect([$asset])];
             }
         }
 

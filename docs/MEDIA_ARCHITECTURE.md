@@ -63,7 +63,9 @@ Every arrow above is a queue dispatch, never a synchronous call — see
 ## Duplicate detection
 
 Implemented in `app/Services/Media/Deduplication`. Four levels, cheapest
-first, short-circuiting on the first hit:
+first, short-circuiting on the first hit — plus two selection-time levels
+(0 and 0b) documented below, which are what actually protect a published
+album:
 
 1. **URL match** (`MediaDuplicateDetectionService::findByUrl`) — normalizes
    the URL (`UrlNormalizer`: lowercase host, strip tracking params like
@@ -102,9 +104,10 @@ image served under several URLs by a CDN. research.google ships every
 article figure as both `original_images/X.png` and
 `images/X.width-1250.png`; blog.google as `X.width-1300.png` and
 `X.width-200.format-webp.webp`. The URLs genuinely differ (Level 1 misses
-them), and reference-only assets are never fetched, so no content or
-perceptual hash ever exists (Levels 2-3 never run). Left alone, the same
-picture is attached to a post two or three times.
+them), and reference-only assets are never downloaded, so no content hash
+ever exists (Level 2 never runs) and no perceptual hash exists until Level 0b
+computes one at selection time. Left alone, the same picture is attached to a
+post two or three times.
 
 `RenditionKeyBuilder` produces a "same picture" key from host + filename
 with CDN rendition markers stripped (`.width-N`, `.format-X`, `-600x600`,
@@ -130,6 +133,54 @@ safe because the id itself is base64url and cannot contain one.
 Applied in `MediaSelectionService` *after* ranking — so the surviving
 rendition of each picture is its best-scoring one — rather than at
 ingestion, keeping it non-destructive and consistent with the rule below.
+
+### Level 0b — selection-time fingerprinting
+
+Filenames have a floor they cannot cross. Level 0 relates two URLs only when
+their stems are related, and a newsroom is free to publish one photograph
+under two names that share nothing. news.mit.edu did exactly that with the
+AI-GUIDE device photo, shipping it as both
+`images/202608/mit-lincoln-AI-GUIDE.jpg` and
+`styles/news_article__image_gallery/public/images/202608/AI-GUIDE device.jpeg`.
+Every URL heuristic passed them through and the published album showed the
+photo twice. Their dHashes are identical.
+
+`ImageFingerprintProbe` closes that gap by reading the actual bytes of the
+few finalists of a post, reducing each to a 64-bit dHash, and dropping the
+bytes. Nothing is written to storage and `provider` stays `external`, so the
+reference-only stance is untouched — this is the same bargain
+`ImageDimensionProbe` already makes for width and height. Reading the whole
+file also corrects dimensions: a 64 KB header read can parse an embedded EXIF
+thumbnail instead of the image, which is how one MIT rendition was recorded
+as 390x260 when it is really 1500x1000, and then ranked below a worse copy.
+
+Two guards keep the pass from doing harm:
+
+- **Featureless images are never an identity.** dHash compares each pixel to
+  its right neighbour, so a plain backdrop or flat gradient hashes to
+  near-uniform bits and sits within the threshold of every other such image.
+  `PerceptualHasher::isDistinctive` requires the rarer bit value to appear at
+  least 6 times in 64 and is enforced at Level 0b *and* Level 3. Dropping a
+  real photo from an album is a louder failure than publishing one twice.
+- **Evidence only ever merges.** An asset keeps every identity it has —
+  always its URL key, plus a hash once one is known — and two assets match if
+  *any* pair of their keys matches (`RenditionKeyBuilder::keysFor` /
+  `isSamePictureByKeys`). Without this, fingerprinting one rendition would
+  move it off the `url:` key it shared with an un-fingerprinted sibling, and
+  the pair would reach the album.
+
+Cost is bounded on three axes: `fingerprint_candidates` (8) reads, each
+capped at `fingerprint_max_bytes` (8 MB) and `fingerprint_timeout_seconds`
+(8s), under a `fingerprint_budget_seconds` (25s) wall-clock ceiling for the
+whole pass. The timeout is deliberately shorter than the pipeline's general
+20s download timeout: eight of those would exceed the selection worker's own
+timeout. Whatever the budget does not reach keeps its URL key, which is
+exactly the behaviour that preceded fingerprinting.
+
+A pixel-level match is persisted (`status=duplicate`, `duplicate_of_id`), so
+later articles citing either URL skip the loser before selection begins. A
+rendition-key match is not: it is a filename guess, good enough to pick one
+copy for this post, not good enough to mark a row duplicate forever.
 
 Duplicates are never deleted: the loser row gets `status=duplicate` and
 `duplicate_of_id` pointing at the canonical row (`MediaAsset::canonical()`).

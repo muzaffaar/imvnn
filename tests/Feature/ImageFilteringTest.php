@@ -13,6 +13,7 @@ use App\Models\TelegramChannel;
 use App\Services\Media\Deduplication\RenditionKeyBuilder;
 use App\Services\Media\Extraction\HtmlContentExtractor;
 use App\Services\Media\ImageDimensionProbe;
+use App\Services\Media\ImageFingerprintProbe;
 use App\Services\Media\Selection\MediaSelectionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -63,6 +64,31 @@ class ImageFilteringTest extends TestCase
         // Dimensions are already set on every fixture asset, so a probe would
         // only add network noise.
         $this->mock(ImageDimensionProbe::class)->shouldReceive('probe')->andReturn(false);
+        $this->mock(ImageFingerprintProbe::class)->shouldReceive('fingerprint')->andReturn(false);
+    }
+
+    /**
+     * Stands in for the network read, handing back the hash each URL's pixels
+     * would produce. Keyed by URL so a test can state "these two URLs are the
+     * same photograph" without shipping image fixtures.
+     *
+     * @param  array<string, string>  $hashesByUrl
+     */
+    private function fingerprintsAs(array $hashesByUrl): void
+    {
+        $this->mock(ImageFingerprintProbe::class)
+            ->shouldReceive('fingerprint')
+            ->andReturnUsing(function (MediaAsset $asset) use ($hashesByUrl) {
+                $hash = $hashesByUrl[$asset->original_url] ?? null;
+
+                if (! $hash || $asset->perceptual_hash) {
+                    return false;
+                }
+
+                $asset->update(['perceptual_hash' => $hash]);
+
+                return true;
+            });
     }
 
     private function extract(string $html): array
@@ -408,5 +434,105 @@ class ImageFilteringTest extends TestCase
             .' srcset="https://example.com/small.jpg 400w, https://example.com/large.jpg 1600w" alt="A robot"></article>';
 
         $this->assertSame(['https://example.com/large.jpg'], $this->extract($html));
+    }
+
+    public function test_one_photograph_published_under_two_names_takes_one_album_slot(): void
+    {
+        // The MIT AI-GUIDE post: news.mit.edu shipped one device photograph as
+        // both `mit-lincoln-AI-GUIDE.jpg` and `AI-GUIDE device.jpeg`. Nothing
+        // in either filename relates them, so every URL heuristic passed them
+        // through and the album showed the photo twice. Their real dHashes,
+        // measured from the live files, are identical.
+        $this->mock(ImageDimensionProbe::class)->shouldReceive('probe')->andReturn(false);
+        $base = 'https://news.mit.edu/sites/default/files/';
+        $device = $base.'images/202608/mit-lincoln-AI-GUIDE.jpg';
+        $gallery = $base.'styles/news_article__image_gallery/public/images/202608/AI-GUIDE%20device.jpeg';
+        $other = $base.'images/202608/lincoln-laboratory-campus.jpg';
+
+        $this->fingerprintsAs([
+            $device => '30525656c4cc0e1e',
+            $gallery => '30525656c4cc0e1e',
+            $other => '0f3c7ac1935a6ef0',
+        ]);
+
+        $news = $this->newsWith([
+            $this->asset($device, null, 1500, 1000),
+            $this->asset($gallery, null, 900, 600),
+            $this->asset($other, null, 1200, 800),
+        ]);
+
+        $plan = app(MediaSelectionService::class)->selectForNewsItem($news, $this->channel());
+        $urls = array_map(fn (MediaAsset $a) => $a->original_url, $plan->assets);
+
+        $this->assertCount(2, $plan->assets);
+        $this->assertContains($other, $urls);
+        $this->assertNotEquals($urls[0], $urls[1]);
+    }
+
+    public function test_the_dropped_copy_is_recorded_so_later_articles_skip_it(): void
+    {
+        $this->mock(ImageDimensionProbe::class)->shouldReceive('probe')->andReturn(false);
+        $first = 'https://news.mit.edu/files/robot-hand-close-up.jpg';
+        $second = 'https://news.mit.edu/files/gallery/dexterity-demo.jpeg';
+        $this->fingerprintsAs([$first => '30525656c4cc0e1e', $second => '30525656c4cc0e1e']);
+
+        $kept = $this->asset($first, null, 1600, 1000);
+        $dropped = $this->asset($second, null, 800, 500);
+        $news = $this->newsWith([$kept, $dropped]);
+
+        app(MediaSelectionService::class)->selectForNewsItem($news, $this->channel());
+
+        $this->assertSame($kept->id, $dropped->fresh()->duplicate_of_id);
+        $this->assertFalse($dropped->fresh()->isUsable());
+        $this->assertNull($kept->fresh()->duplicate_of_id);
+    }
+
+    public function test_near_identical_copies_collapse_but_different_photos_do_not(): void
+    {
+        // A resized, recompressed copy drifts a few bits; two different photos
+        // do not. The threshold has to separate those, not just exact matches.
+        $keys = app(RenditionKeyBuilder::class);
+        $original = $this->asset('https://example.com/a.jpg');
+        $resized = $this->asset('https://example.com/b.jpg');
+        $different = $this->asset('https://example.com/c.jpg');
+        $original->perceptual_hash = '30525656c4cc0e1e';
+        $resized->perceptual_hash = '30525656c4cc0e1f';   // one bit apart
+        $different->perceptual_hash = 'cfada9a93b33f1e1'; // inverted
+
+        $this->assertTrue($keys->isSamePicture($keys->keyFor($original), $keys->keyFor($resized)));
+        $this->assertFalse($keys->isSamePicture($keys->keyFor($original), $keys->keyFor($different)));
+    }
+
+    public function test_a_featureless_image_never_matches_another_on_its_hash(): void
+    {
+        // dHash compares each pixel to its right neighbour, so anything without
+        // horizontal detail hashes to near-uniform bits. Trusting that would
+        // merge unrelated flat images and silently drop a real photo from an
+        // album — a louder failure than the duplicate this all exists to stop.
+        $keys = app(RenditionKeyBuilder::class);
+        $blank = $this->asset('https://example.com/white-backdrop.jpg');
+        $alsoBlank = $this->asset('https://example.com/grey-card.jpg');
+        $blank->perceptual_hash = '0000000000000000';
+        $alsoBlank->perceptual_hash = '0000000000000001';
+
+        $this->assertFalse($keys->isSamePicture($keys->keyFor($blank), $keys->keyFor($alsoBlank)));
+    }
+
+    public function test_fingerprinting_one_rendition_does_not_free_its_sibling(): void
+    {
+        // Learning a hash for one copy must never cost a match the URL key
+        // already made: an asset that moves from a `url:` key to a `phash:`
+        // key would otherwise stop matching the un-fingerprinted rendition it
+        // had always been grouped with, and the pair would reach the album.
+        $keys = app(RenditionKeyBuilder::class);
+        $base = 'https://storage.googleapis.com/images/';
+        $fingerprinted = $this->asset($base.'distinctive-picture.width-1600.png');
+        $fingerprinted->perceptual_hash = '30525656c4cc0e1e';
+        $plain = $this->asset($base.'distinctive-picture.width-200.png');
+
+        $this->assertTrue($keys->isSamePictureByKeys(
+            $keys->keysFor($fingerprinted),
+            $keys->keysFor($plain),
+        ));
     }
 }

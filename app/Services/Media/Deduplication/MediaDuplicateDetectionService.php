@@ -59,6 +59,16 @@ class MediaDuplicateDetectionService
         }
 
         $hash = $this->perceptualHasher->hashFromBinary($binaryContents);
+
+        // A featureless image — a plain backdrop, a flat gradient — hashes to
+        // near-uniform bits and lands within the threshold of every other such
+        // image. Claiming those are the same picture would discard a real
+        // asset, so an image with nothing to fingerprint is simply not one
+        // this level can judge.
+        if (! $this->perceptualHasher->isDistinctive($hash)) {
+            return null;
+        }
+
         $threshold = config('media.deduplication.perceptual_hash_hamming_threshold');
         $lookbackDays = config('media.deduplication.perceptual_hash_lookback_days');
 
@@ -73,6 +83,10 @@ class MediaDuplicateDetectionService
         $bestDistance = PHP_INT_MAX;
 
         foreach ($candidates as $candidate) {
+            if (! $this->perceptualHasher->isDistinctive($candidate->perceptual_hash)) {
+                continue;
+            }
+
             $distance = $this->perceptualHasher->hammingDistance($hash, $candidate->perceptual_hash);
             if ($distance < $bestDistance) {
                 $bestDistance = $distance;

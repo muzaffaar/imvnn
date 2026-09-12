@@ -5,8 +5,13 @@ namespace App\Services\Media\Deduplication;
 use App\Models\MediaAsset;
 
 /**
- * A "same picture" key for assets we never downloaded, and therefore have
- * no content hash or perceptual hash for.
+ * "Same picture" identities for assets we never downloaded, and the rules for
+ * comparing them.
+ *
+ * An asset carries several identities at once — always a key derived from its
+ * URL, and a perceptual or content hash once something has looked at the
+ * bytes. `keysFor` returns all of them and `isSamePictureByKeys` matches on
+ * any pair, so learning a hash can only merge more copies, never fewer.
  *
  * CDNs routinely serve one image under several URLs — confirmed on
  * research.google, where every article figure appears as both
@@ -14,9 +19,14 @@ use App\Models\MediaAsset;
  * `images/GlucoFM1_Overview.width-1250.png`, and on blog.google as
  * `WeatherNext3_Title.width-1300.png` / `WeatherNext3_Title.width-200.format-webp.webp`.
  * Level 1 (URL) dedup misses these because the URLs genuinely differ, and
- * Levels 2/3 (content/perceptual hash) never run for reference-only assets
- * because we deliberately never fetch their bytes. Without this, the same
- * picture is attached to a Telegram post two or three times.
+ * Level 2 (content hash) never runs for reference-only assets because we
+ * deliberately never copy their bytes. Without this, the same picture is
+ * attached to a Telegram post two or three times.
+ *
+ * Filenames still have a floor: nothing here can relate two names that share
+ * no stem. ImageFingerprintProbe crosses that floor at selection time by
+ * giving reference-only assets a perceptual hash, which is compared here by
+ * Hamming distance rather than by equality.
  *
  * Deliberately keyed on host + normalized *filename*, ignoring the
  * directory — that's the whole point, since renditions of one image live in
@@ -28,6 +38,8 @@ use App\Models\MediaAsset;
 class RenditionKeyBuilder
 {
     private const MIN_DISTINCTIVE_LENGTH = 8;
+
+    public function __construct(private readonly PerceptualHasher $perceptualHasher) {}
 
     /** Rendition markers CDNs append; applied repeatedly since they chain. */
     private const RENDITION_PATTERNS = [
@@ -78,6 +90,15 @@ class RenditionKeyBuilder
             return true;
         }
 
+        // Pixels outrank filenames. Two perceptual hashes within the dedup
+        // threshold are the same photograph however differently the CMS chose
+        // to name each copy — which is the only thing that catches a picture
+        // republished under an unrelated filename. Both hashes must carry
+        // real structure first; see PerceptualHasher::isDistinctive.
+        if (str_starts_with($first, 'phash:') && str_starts_with($second, 'phash:')) {
+            return $this->isSamePerceptualHash(substr($first, 6), substr($second, 6));
+        }
+
         // Only URL-derived keys can be truncated. A content or perceptual hash
         // is exact, and a provider id is authoritative.
         if (! str_starts_with($first, 'url:') || ! str_starts_with($second, 'url:')) {
@@ -100,6 +121,74 @@ class RenditionKeyBuilder
         return ! $this->isSeparator($nextCharacter) && ! $this->isSeparator($lastCharacter);
     }
 
+    /**
+     * Whether any identity of one picture matches any identity of another.
+     *
+     * Assets carry several identities at once — a URL stem, and, once the
+     * bytes have been looked at, a perceptual hash — and the two do not
+     * arrive together. Comparing only the strongest available identity is
+     * what let a duplicate through: fingerprinting one rendition of a picture
+     * moved it from a `url:` key to a `phash:` key, so it stopped matching
+     * the un-fingerprinted rendition it had always matched before. Keeping
+     * every identity and matching on any of them means new evidence can only
+     * ever merge more copies, never fewer.
+     *
+     * @param  list<string>  $first
+     * @param  list<string>  $second
+     */
+    public function isSamePictureByKeys(array $first, array $second): bool
+    {
+        foreach ($first as $a) {
+            foreach ($second as $b) {
+                if ($this->isSamePicture($a, $b)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Every identity an asset currently has, strongest first. The URL key is
+     * always present, so an asset never loses the identity it was grouped by
+     * when a stronger one is learned.
+     *
+     * @return list<string>
+     */
+    public function keysFor(MediaAsset $asset): array
+    {
+        $keys = [];
+
+        if ($asset->perceptual_hash) {
+            $keys[] = 'phash:'.$asset->perceptual_hash;
+        }
+
+        if ($asset->content_hash) {
+            $keys[] = 'hash:'.$asset->content_hash;
+        }
+
+        if ($asset->external_provider && $asset->external_id) {
+            $keys[] = "{$asset->external_provider}:{$asset->external_id}";
+        }
+
+        $keys[] = 'url:'.$this->visualKeyFromUrl($asset->original_url);
+
+        return $keys;
+    }
+
+    private function isSamePerceptualHash(string $first, string $second): bool
+    {
+        if (! $this->perceptualHasher->isDistinctive($first)
+            || ! $this->perceptualHasher->isDistinctive($second)) {
+            return false;
+        }
+
+        $threshold = (int) config('media.deduplication.perceptual_hash_hamming_threshold');
+
+        return $this->perceptualHasher->hammingDistance($first, $second) <= $threshold;
+    }
+
     private function isSeparator(string $character): bool
     {
         return $character === '' || in_array($character, ['-', '_', '.', '/', '|'], true);
@@ -107,21 +196,11 @@ class RenditionKeyBuilder
 
     public function keyFor(MediaAsset $asset): string
     {
-        // When we actually hold the bytes, exact/perceptual identity beats
-        // any URL guessing.
-        if ($asset->content_hash) {
-            return 'hash:'.$asset->content_hash;
-        }
-
-        if ($asset->perceptual_hash) {
-            return 'phash:'.$asset->perceptual_hash;
-        }
-
-        if ($asset->external_provider && $asset->external_id) {
-            return "{$asset->external_provider}:{$asset->external_id}";
-        }
-
-        return 'url:'.$this->visualKeyFromUrl($asset->original_url);
+        // When the bytes have been looked at, what they depict beats any URL
+        // guessing. The perceptual hash leads rather than the content hash
+        // because it also matches across renditions, and two byte-identical
+        // files necessarily share it anyway.
+        return $this->keysFor($asset)[0];
     }
 
     private function visualKeyFromUrl(string $url): string

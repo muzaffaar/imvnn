@@ -84,6 +84,31 @@ return [
         // for every new image doesn't pay for itself.
         'perceptual_hash_lookback_days' => 30,
 
+        // Byte ceiling for a selection-time fingerprint read (see
+        // ImageFingerprintProbe). The bytes are hashed and dropped, never
+        // stored, so this bounds transfer rather than storage: 8 MB covers
+        // essentially every article photograph while refusing to pull a
+        // print-resolution TIFF through the pipeline.
+        'fingerprint_max_bytes' => env('MEDIA_FINGERPRINT_MAX_BYTES', 8 * 1024 * 1024),
+
+        // How many of a post's ranked finalists get fingerprinted. Only these
+        // can reach the album, so hashing further down the list buys nothing
+        // — and each entry costs one bounded HTTP read.
+        'fingerprint_candidates' => env('MEDIA_FINGERPRINT_CANDIDATES', 8),
+
+        // Deliberately shorter than the pipeline's general download timeout.
+        // A fingerprint is an optimisation: a slow origin should cost the
+        // selection job a few seconds and fall back to URL matching, not hold
+        // a worker open. Multiplied by fingerprint_candidates, the general
+        // 20s would exceed the queue worker's own timeout on its own.
+        'fingerprint_timeout_seconds' => env('MEDIA_FINGERPRINT_TIMEOUT_SECONDS', 8),
+
+        // Wall-clock ceiling for the whole fingerprint pass of one post. The
+        // per-request timeout bounds a single slow origin; this bounds a run
+        // of them. Whatever is left when the budget runs out keeps its URL
+        // key, which is exactly the behaviour that preceded fingerprinting.
+        'fingerprint_budget_seconds' => env('MEDIA_FINGERPRINT_BUDGET_SECONDS', 25),
+
         // Semantic embedding similarity (Level 4) is opt-in per docs/MEDIA_ARCHITECTURE.md.
         'embedding_similarity_enabled' => env('MEDIA_EMBEDDING_DEDUP_ENABLED', false),
         'embedding_similarity_threshold' => 0.92,

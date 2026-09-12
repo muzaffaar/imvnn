@@ -20,6 +20,13 @@ class PerceptualHasher
 
     private const HASH_HEIGHT = 8;
 
+    /**
+     * Fewest occurrences of the rarer bit value a hash may have and still be
+     * treated as an identity. 6 of 64 is far below any real photograph's
+     * split and far above a flat image's near-zero.
+     */
+    private const MIN_MINORITY_BITS = 6;
+
     public function __construct(private readonly ImageManager $manager) {}
 
     /** @return string 16-character hex string encoding 64 bits */
@@ -39,6 +46,34 @@ class PerceptualHasher
         }
 
         return $this->bitsToHex($bits);
+    }
+
+    /**
+     * Whether a hash carries enough structure to be trusted as an identity.
+     *
+     * dHash compares each pixel to its right neighbour, so an image with no
+     * horizontal detail — a solid colour, a flat gradient, a plain backdrop —
+     * produces a near-uniform bit string. Two such images land within any
+     * sane Hamming threshold of each other while being entirely different
+     * pictures, which is exactly the false positive that must never reach the
+     * selection stage: it would silently drop a real photo from an album.
+     *
+     * Requiring both bit values to appear at least MIN_MINORITY_BITS times
+     * costs nothing on real photographs (which sit near a 50/50 split) and
+     * rejects the degenerate cases outright.
+     */
+    public function isDistinctive(string $hexHash): bool
+    {
+        $bits = $this->hexToBits($hexHash);
+        $length = strlen($bits);
+
+        if ($length !== self::HASH_HEIGHT * (self::HASH_WIDTH - 1)) {
+            return false;
+        }
+
+        $ones = substr_count($bits, '1');
+
+        return min($ones, $length - $ones) >= self::MIN_MINORITY_BITS;
     }
 
     public function hammingDistance(string $hexHashA, string $hexHashB): int
