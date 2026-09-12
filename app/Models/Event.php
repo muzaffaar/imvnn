@@ -2,20 +2,26 @@
 
 namespace App\Models;
 
+use App\Casts\StoredDateTime;
 use App\Models\Concerns\HasUuidPrimaryKey;
+use App\Models\Concerns\StoresDatesInStorageTimezone;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Event extends Model
 {
-    use HasUuidPrimaryKey;
+    use HasUuidPrimaryKey, StoresDatesInStorageTimezone;
 
     protected $fillable = ['title', 'slug', 'summary', 'first_seen_at'];
 
     protected function casts(): array
     {
-        return ['first_seen_at' => 'datetime'];
+        return [
+            'first_seen_at' => StoredDateTime::class,
+            'created_at' => StoredDateTime::class,
+            'updated_at' => StoredDateTime::class,
+        ];
     }
 
     public function newsItems(): HasMany

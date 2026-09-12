@@ -4,7 +4,7 @@ namespace App\Services\Media\Deduplication;
 
 use App\Enums\MediaType;
 use App\Models\MediaAsset;
-use Carbon\CarbonImmutable;
+use App\Support\Time\StorageTimezone;
 
 /**
  * Runs duplicate detection cheapest-first, short-circuiting on the first hit —
@@ -76,7 +76,7 @@ class MediaDuplicateDetectionService
             ->where('type', $type)
             ->whereNull('duplicate_of_id')
             ->whereNotNull('perceptual_hash')
-            ->where('created_at', '>=', CarbonImmutable::now()->subDays($lookbackDays))
+            ->where('created_at', '>=', StorageTimezone::now()->subDays($lookbackDays))
             ->get(['id', 'perceptual_hash']);
 
         $best = null;

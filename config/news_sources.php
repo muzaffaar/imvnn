@@ -195,7 +195,12 @@ return [
     'freshness' => [
         'only_today' => env('NEWS_ONLY_TODAY', true),
         'timezone' => env('NEWS_DAY_TIMEZONE', 'Asia/Tashkent'),
-        'storage_timezone' => env('NEWS_STORAGE_TIMEZONE', 'UTC'),
+
+        // The zone the freshness window's SQL boundaries are expressed in is
+        // deliberately NOT configurable here. It is whatever the timestamp
+        // columns physically hold, `app.storage_timezone`, and a freshness
+        // policy that could disagree with the data is what queued a day of
+        // yesterday's articles on 12 September 2026.
 
         // Rolling lookback, in hours, which takes precedence over
         // `only_today` when set above zero: an article is fresh if it was

@@ -74,7 +74,31 @@ and then sat permanently unpublishable.
 
 The error runs both ways: a `+05:00` timestamp stored as-is reads five hours
 late, which can carry yesterday's article into today. `PublishDateParser` now
-returns UTC, so both halves of the comparison are in the same zone.
+returns the storage timezone, so both halves of the comparison are in the same
+zone.
+
+## Today's news dropped again, because the storage timezone was configured twice
+
+The same failure one layer up. `FreshnessPolicy` read its own config key for
+the zone timestamps are stored in, and that key said `UTC` while the columns
+held `Asia/Tashkent` readings — `news_items.published_at` of `2026-09-11
+18:45:00` for an article the MIT feed stamped `09:45:00 -0400`, five hours
+later than UTC.
+
+Nothing failed. The day window simply slid five hours: the scheduler's SQL
+selected from 19:00 yesterday to 19:00 today, queued articles from yesterday
+evening, and `PublishToTelegramJob`'s send-time re-check — comparing instants,
+and therefore right — rejected each one as `not_fresh_at_send_time`. Today's
+news published before 19:00 was never selected at all.
+
+Two things fix it. The storage timezone is now a single key,
+`app.storage_timezone`, read through `App\Support\Time\StorageTimezone` by
+the parser, the freshness window and hydration alike, so no two layers can
+hold different answers. And hydration no longer infers it: `published_at` and
+every other stored timestamp casts through `App\Casts\StoredDateTime`, which
+reads the column in the storage zone rather than in `app.timezone` and
+converts on the way back. `app.timezone` now only decides how a timestamp is
+displayed.
 
 ## Images from the related-posts strip below the article
 

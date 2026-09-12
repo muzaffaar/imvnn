@@ -2,14 +2,16 @@
 
 namespace App\Models;
 
+use App\Casts\StoredDateTime;
 use App\Models\Concerns\HasUuidPrimaryKey;
+use App\Models\Concerns\StoresDatesInStorageTimezone;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class NewsItem extends Model
 {
-    use HasUuidPrimaryKey;
+    use HasUuidPrimaryKey, StoresDatesInStorageTimezone;
 
     protected $fillable = [
         'source_id', 'event_id', 'title', 'url', 'canonical_url', 'raw_html', 'source_payload', 'content', 'published_at',
@@ -19,11 +21,14 @@ class NewsItem extends Model
     protected function casts(): array
     {
         return [
-            'published_at' => 'datetime',
+            'published_at' => StoredDateTime::class,
             'source_payload' => 'array',
-            'media_analysis_completed_at' => 'datetime',
-            'publish_queued_at' => 'datetime',
-            'telegram_published_at' => 'datetime',
+            'media_analysis_completed_at' => StoredDateTime::class,
+            'publish_queued_at' => StoredDateTime::class,
+            'telegram_published_at' => StoredDateTime::class,
+            'telegram_publish_started_at' => StoredDateTime::class,
+            'created_at' => StoredDateTime::class,
+            'updated_at' => StoredDateTime::class,
         ];
     }
 

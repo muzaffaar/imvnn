@@ -373,10 +373,11 @@ readability:
 3. `<time datetime>`.
 4. Visible text near the headline.
 
-**Every parsed date is normalised to UTC.** Eloquent binds a
-`DateTimeInterface` to SQL by formatting it as-is, without converting the
-timezone, so a date carrying an offset would be stored as its local wall-clock
-reading. The AWS blog publishes with `-08:00`: an article stamped 13:58 local is
+**Every parsed date is normalised to the storage timezone**
+(`app.storage_timezone`, the zone the timestamp columns physically hold —
+`Asia/Tashkent` today). Eloquent binds a `DateTimeInterface` to SQL by
+formatting it as-is, without converting the timezone, so a date carrying an
+offset would be stored as its local wall-clock reading. The AWS blog publishes with `-08:00`: an article stamped 13:58 local is
 really 21:58 UTC, inside the current Tashkent day, and storing 13:58 put it
 eight hours early and outside the window — today's news, silently dropped. A
 `+05:00` source would err the other way and carry yesterday's article into
@@ -420,13 +421,30 @@ to be fixed in `ArticleContentExtractor` before it could be read:
 
 ### A timezone trap worth knowing
 
-`FreshnessPolicy::windowStart()` returns **UTC** deliberately. Eloquent binds
-a `DateTimeInterface` to SQL by formatting it as-is, *without* converting the
-timezone — so returning a `+05:00` boundary compares `2026-09-10 00:00`
-against UTC-stored timestamps and silently discards everything published
-between 19:00 and 24:00 UTC: the first five hours of every Tashkent day.
-Carbon-to-Carbon comparison in `isFresh()` is unaffected (it compares
-instants), which is exactly what makes the SQL side easy to get wrong.
+`FreshnessPolicy::windowStart()` returns its boundary in the **storage
+timezone** — `App\Support\Time\StorageTimezone::zone()`, never a zone of its
+own. Eloquent binds a `DateTimeInterface` to SQL by formatting it as-is,
+*without* converting the timezone, so a boundary in any other zone compares
+one zone's wall clock against another's and slides the whole window by the
+offset. Against `Asia/Tashkent` readings, a UTC boundary discards everything
+published before 19:00 local and admits the previous evening instead.
+
+Carbon-to-Carbon comparison in `isFresh()` is unaffected — it compares
+instants, and a correctly hydrated timestamp is a correct instant in any zone.
+That asymmetry is what makes the SQL side easy to get wrong and hard to
+notice: the two checks disagree, the scheduler queues articles the send-time
+check then throws away as `not_fresh_at_send_time`.
+
+Timestamps hydrate through `App\Casts\StoredDateTime`, which reads a stored
+reading in the storage timezone rather than in PHP's default zone, and writes
+back by converting to it. Raw query-builder writes bypass casts entirely, so
+they use `StorageTimezone::now()` rather than `now()`.
+
+`app.storage_timezone` describes the DATA, not a preference. Changing it does
+not reinterpret existing rows into a new zone, it asserts what they already
+contain — so it only moves together with a migration that rewrites every
+stored value by the offset between the two zones (see
+`2026_09_11_130000_shift_timestamps_to_application_timezone`).
 
 ## Deduplication
 

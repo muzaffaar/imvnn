@@ -102,6 +102,7 @@ class IngestionGatesTest extends TestCase
         // silently slides by the offset.
         config([
             'app.timezone' => 'Asia/Tashkent',
+            'app.storage_timezone' => 'Asia/Tashkent',
             'news_sources.freshness.only_today' => true,
             'news_sources.freshness.max_age_hours' => null,
             'news_sources.freshness.timezone' => 'Asia/Tashkent',
@@ -120,6 +121,7 @@ class IngestionGatesTest extends TestCase
         // Tashkent day fell before a UTC-midnight window start.
         config([
             'app.timezone' => 'Asia/Tashkent',
+            'app.storage_timezone' => 'Asia/Tashkent',
             'news_sources.freshness.only_today' => true,
             'news_sources.freshness.max_age_hours' => null,
             'news_sources.freshness.timezone' => 'Asia/Tashkent',

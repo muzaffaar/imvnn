@@ -15,6 +15,7 @@ use App\Services\News\FreshnessPolicy;
 use App\Services\Telegram\TelegramApiException;
 use App\Services\Telegram\TelegramPublisher;
 use App\Support\Observability\PipelineLogger;
+use App\Support\Time\StorageTimezone;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -87,7 +88,7 @@ class PublishToTelegramJob implements ShouldQueue
         if ($newsItem && PublishedPost::alreadySent($channel->id, $newsItem->canonical_url)) {
             NewsItem::whereKey($this->newsItemId)
                 ->whereNull('telegram_published_at')
-                ->update(['telegram_published_at' => now(), 'publish_queued_at' => null]);
+                ->update(['telegram_published_at' => StorageTimezone::now(), 'publish_queued_at' => null]);
 
             PipelineLogger::warning('telegram.publish_skipped', [
                 'telegram_channel_id' => $channel->id,
@@ -122,7 +123,7 @@ class PublishToTelegramJob implements ShouldQueue
         if (! NewsItem::whereKey($this->newsItemId)
             ->whereNull('telegram_published_at')
             ->whereNull('telegram_publish_started_at')
-            ->update(['telegram_publish_started_at' => now()])) {
+            ->update(['telegram_publish_started_at' => StorageTimezone::now()])) {
             PipelineLogger::info('telegram.publish_skipped', [
                 'telegram_channel_id' => $channel->id,
                 'news_item_id' => $this->newsItemId,
@@ -175,7 +176,7 @@ class PublishToTelegramJob implements ShouldQueue
             throw $e;
         }
 
-        NewsItem::whereKey($this->newsItemId)->update(['telegram_published_at' => now()]);
+        NewsItem::whereKey($this->newsItemId)->update(['telegram_published_at' => StorageTimezone::now()]);
 
         // Written immediately after a confirmed delivery, and before anything
         // that could fail: everything below is bookkeeping, whereas losing this

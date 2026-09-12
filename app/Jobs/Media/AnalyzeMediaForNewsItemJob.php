@@ -10,6 +10,7 @@ use App\Services\Media\EventMediaPoolService;
 use App\Services\Media\Scoring\MediaQualityScorer;
 use App\Services\Media\Scoring\RelevanceAnalysisService;
 use App\Support\Observability\PipelineLogger;
+use App\Support\Time\StorageTimezone;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -68,7 +69,7 @@ class AnalyzeMediaForNewsItemJob implements ShouldQueue
         // Marks this item as a publishing candidate — see
         // PublishNextReadyNewsItemJob, which only ever selects from items
         // where this is set.
-        $newsItem->update(['media_analysis_completed_at' => now()]);
+        $newsItem->update(['media_analysis_completed_at' => StorageTimezone::now()]);
 
         MediaProcessingLog::record(
             ProcessingStage::QualityAnalysis, ProcessingLogStatus::Succeeded,

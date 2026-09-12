@@ -2,6 +2,7 @@
 
 namespace App\Services\News;
 
+use App\Support\Time\StorageTimezone;
 use Carbon\CarbonImmutable;
 
 /**
@@ -60,7 +61,7 @@ class PublishDateParser
 
     private function storageTimezone(): string
     {
-        return (string) config('app.timezone', 'UTC');
+        return StorageTimezone::zone();
     }
 
     /**

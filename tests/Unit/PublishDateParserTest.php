@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Services\News\FreshnessPolicy;
 use App\Services\News\PublishDateParser;
 use Tests\TestCase;
 
@@ -78,7 +79,7 @@ class PublishDateParserTest extends TestCase
         // own wall-clock reading. The AWS blog publishes with `-08:00`: this
         // timestamp is really 21:58 UTC and was being saved as 13:58, eight
         // hours early, which pushed today's news out of the window.
-        config(['app.timezone' => 'UTC']);
+        config(['app.timezone' => 'UTC', 'app.storage_timezone' => 'UTC']);
 
         $parsed = app(PublishDateParser::class)->parse('2026-09-10T13:58:09-08:00');
 
@@ -90,7 +91,7 @@ class PublishDateParserTest extends TestCase
     {
         // The error runs both ways: stored as-is, this would read five hours
         // late and could carry yesterday's article into today.
-        config(['app.timezone' => 'UTC']);
+        config(['app.timezone' => 'UTC', 'app.storage_timezone' => 'UTC']);
 
         $parsed = app(PublishDateParser::class)->parse('2026-09-11T02:00:00+05:00');
 
@@ -107,9 +108,9 @@ class PublishDateParserTest extends TestCase
             'news_sources.freshness.timezone' => 'UTC',
         ]);
         $parser = app(PublishDateParser::class);
-        $policy = app(\App\Services\News\FreshnessPolicy::class);
+        $policy = app(FreshnessPolicy::class);
 
-        config(['app.timezone' => 'UTC']);
+        config(['app.timezone' => 'UTC', 'app.storage_timezone' => 'UTC']);
         $published = now('UTC')->startOfDay()->addHours(3);
         $asOffsetString = $published->copy()->setTimezone('-08:00')->toIso8601String();
 
@@ -118,11 +119,11 @@ class PublishDateParserTest extends TestCase
 
     public function test_dates_are_converted_into_the_storage_timezone(): void
     {
-        // Timestamps are stored in the application timezone, so the parser has to
-        // hand back that zone: Eloquent formats a DateTimeInterface as-is, so a
-        // value in any other zone is written as its own wall clock and read back
-        // hours out.
-        config(['app.timezone' => 'Asia/Tashkent']);
+        // The parser has to hand back the zone the columns are written in
+        // (`app.storage_timezone`): Eloquent formats a DateTimeInterface as-is,
+        // so a value in any other zone is stored as its own wall clock and read
+        // back hours out.
+        config(['app.timezone' => 'Asia/Tashkent', 'app.storage_timezone' => 'Asia/Tashkent']);
 
         $parsed = app(PublishDateParser::class)->parse('2026-09-10T21:58:09+00:00');
 
@@ -132,7 +133,7 @@ class PublishDateParserTest extends TestCase
 
     public function test_the_storage_timezone_is_followed_rather_than_hard_coded(): void
     {
-        config(['app.timezone' => 'UTC']);
+        config(['app.timezone' => 'UTC', 'app.storage_timezone' => 'UTC']);
 
         $parsed = app(PublishDateParser::class)->parse('2026-09-11T02:58:09+05:00');
 

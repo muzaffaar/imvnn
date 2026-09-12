@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Casts\StoredDateTime;
 use App\Enums\MediaProvider;
 use App\Enums\MediaStatus;
 use App\Enums\MediaType;
+use App\Enums\MediaVariantType;
 use App\Models\Concerns\HasUuidPrimaryKey;
+use App\Models\Concerns\StoresDatesInStorageTimezone;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -13,7 +16,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class MediaAsset extends Model
 {
-    use HasUuidPrimaryKey;
+    use HasUuidPrimaryKey, StoresDatesInStorageTimezone;
 
     protected $fillable = [
         'type', 'status', 'provider', 'original_url', 'canonical_url', 'storage_path',
@@ -36,8 +39,10 @@ class MediaAsset extends Model
             'relevance_score' => 'float',
             'quality_score' => 'float',
             'metadata' => 'array',
-            'downloaded_at' => 'datetime',
-            'processed_at' => 'datetime',
+            'downloaded_at' => StoredDateTime::class,
+            'processed_at' => StoredDateTime::class,
+            'created_at' => StoredDateTime::class,
+            'updated_at' => StoredDateTime::class,
         ];
     }
 
@@ -87,7 +92,7 @@ class MediaAsset extends Model
         return $this->hasMany(MediaProcessingLog::class);
     }
 
-    public function variantOfType(\App\Enums\MediaVariantType $type): ?MediaVariant
+    public function variantOfType(MediaVariantType $type): ?MediaVariant
     {
         return $this->variants->firstWhere('variant_type', $type);
     }

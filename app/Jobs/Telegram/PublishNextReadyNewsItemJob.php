@@ -9,6 +9,7 @@ use App\Models\TelegramChannel;
 use App\Services\News\FreshnessPolicy;
 use App\Services\News\NewsPriorityScorer;
 use App\Support\Observability\PipelineLogger;
+use App\Support\Time\StorageTimezone;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Builder;
@@ -210,7 +211,7 @@ class PublishNextReadyNewsItemJob implements ShouldQueue
     {
         $claimed = NewsItem::whereKey($candidate->id)
             ->whereNull('publish_queued_at')
-            ->update(['publish_queued_at' => now()]);
+            ->update(['publish_queued_at' => StorageTimezone::now()]);
 
         return $claimed > 0;
     }

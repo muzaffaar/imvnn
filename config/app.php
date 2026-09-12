@@ -62,12 +62,10 @@ return [
     | Here you may specify the default timezone for your application, which
     | will be used by the PHP date and date-time functions.
     |
-    | This is the timezone every timestamp is STORED in, because Eloquent binds
-    | a DateTimeInterface to SQL by formatting it as-is without converting the
-    | zone. It is deliberately the audience's timezone rather than UTC: this
+    | It is deliberately the audience's timezone rather than UTC: this
     | application's whole job is "today's news, on the day the readers are
-    | living in", so storing that day's wall clock keeps the database legible
-    | and keeps the freshness comparison in one zone end to end.
+    | living in", so `now()` and every date it prints read as the day the
+    | channel's readers are actually in.
     |
     | Safe here specifically because Asia/Tashkent is a fixed UTC+05:00 with no
     | daylight saving (abolished in 1996), so local time never repeats or skips
@@ -80,6 +78,32 @@ return [
     */
 
     'timezone' => env('APP_TIMEZONE', 'UTC'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Database Storage Timezone
+    |--------------------------------------------------------------------------
+    |
+    | The timezone whose wall clock is physically written in the database's
+    | `timestamp without time zone` columns. It is a fact about the DATA, not a
+    | preference: those columns carry no offset, so a stored reading means
+    | nothing until something names the zone it was written in.
+    |
+    | Every layer that touches a timestamp reads it from here, through
+    | App\Support\Time\StorageTimezone — hydration (App\Casts\StoredDateTime),
+    | the publish-date parser, and the freshness window's SQL boundaries. They
+    | must agree, and the only way to guarantee that is for there to be one
+    | answer. Publishing broke on 12 September 2026 because there were two.
+    |
+    | It defaults to `app.timezone`, which is what the columns hold today (see
+    | the 2026_09_11_130000 shift migration). Changing it does NOT reinterpret
+    | the existing rows into a new zone — it asserts what they already contain,
+    | so a change is only correct together with a migration that rewrites every
+    | stored value by the offset between the two zones.
+    |
+    */
+
+    'storage_timezone' => env('DB_STORAGE_TIMEZONE', env('APP_TIMEZONE', 'UTC')),
 
     /*
     |--------------------------------------------------------------------------

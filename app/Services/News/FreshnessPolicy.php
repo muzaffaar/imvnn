@@ -2,6 +2,7 @@
 
 namespace App\Services\News;
 
+use App\Support\Time\StorageTimezone;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 
@@ -53,10 +54,17 @@ class FreshnessPolicy
      * failing. When storage was UTC and these boundaries were +05:00, the
      * comparison discarded everything published in the first five hours of each
      * Tashkent day.
+     *
+     * Read from the one place that knows what the columns actually hold, and
+     * never from a key of its own. A private key here once said UTC while the
+     * rows held Asia/Tashkent readings: the day window slid five hours, the
+     * scheduler queued articles from yesterday evening, and the send-time
+     * re-check — correctly, on the same rows — rejected every one of them as
+     * `not_fresh_at_send_time`.
      */
     private function storageTimezone(): string
     {
-        return (string) config('news_sources.freshness.storage_timezone', 'UTC');
+        return StorageTimezone::zone();
     }
 
     /**
@@ -93,7 +101,7 @@ class FreshnessPolicy
 
     /**
      * Start of today in the audience timezone, returned in the timezone the
-     * application STORES timestamps in (`app.timezone`).
+     * database STORES timestamps in (`app.storage_timezone`).
      *
      * The conversion is load-bearing, not cosmetic: Eloquent binds a
      * DateTimeInterface to SQL by formatting it as-is, without converting

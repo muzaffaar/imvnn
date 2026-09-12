@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Casts\StoredDateTime;
+use App\Models\Concerns\StoresDatesInStorageTimezone;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
 
@@ -19,6 +21,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
  */
 class PublishedPost extends Model
 {
+    use StoresDatesInStorageTimezone;
+
     protected $fillable = [
         'telegram_channel_id', 'canonical_url', 'canonical_url_hash',
         'news_item_id', 'title', 'telegram_message_id', 'article_published_at', 'sent_at',
@@ -28,8 +32,10 @@ class PublishedPost extends Model
     {
         return [
             'telegram_message_id' => 'integer',
-            'article_published_at' => 'datetime',
-            'sent_at' => 'datetime',
+            'article_published_at' => StoredDateTime::class,
+            'sent_at' => StoredDateTime::class,
+            'created_at' => StoredDateTime::class,
+            'updated_at' => StoredDateTime::class,
         ];
     }
 

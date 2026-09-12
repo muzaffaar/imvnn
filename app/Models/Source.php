@@ -2,12 +2,16 @@
 
 namespace App\Models;
 
+use App\Casts\StoredDateTime;
 use App\Enums\SourceFetchType;
+use App\Models\Concerns\StoresDatesInStorageTimezone;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Source extends Model
 {
+    use StoresDatesInStorageTimezone;
+
     protected $fillable = [
         'name', 'slug', 'base_url', 'type', 'reliability_score', 'media_reuse_permitted',
         'fetch_type', 'source_url', 'fetch_options', 'is_active', 'last_fetched_at',
@@ -22,7 +26,9 @@ class Source extends Model
             'fetch_type' => SourceFetchType::class,
             'fetch_options' => 'array',
             'is_active' => 'boolean',
-            'last_fetched_at' => 'datetime',
+            'last_fetched_at' => StoredDateTime::class,
+            'created_at' => StoredDateTime::class,
+            'updated_at' => StoredDateTime::class,
         ];
     }
 
