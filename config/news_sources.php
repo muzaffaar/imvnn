@@ -195,6 +195,7 @@ return [
     'freshness' => [
         'only_today' => env('NEWS_ONLY_TODAY', true),
         'timezone' => env('NEWS_DAY_TIMEZONE', 'Asia/Tashkent'),
+        'storage_timezone' => env('NEWS_STORAGE_TIMEZONE', 'UTC'),
 
         // Rolling lookback, in hours, which takes precedence over
         // `only_today` when set above zero: an article is fresh if it was

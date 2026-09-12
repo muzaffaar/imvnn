@@ -56,7 +56,7 @@ class FreshnessPolicy
      */
     private function storageTimezone(): string
     {
-        return (string) config('app.timezone', 'UTC');
+        return (string) config('news_sources.freshness.storage_timezone', 'UTC');
     }
 
     /**
