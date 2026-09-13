@@ -187,6 +187,25 @@ Duplicates are never deleted: the loser row gets `status=duplicate` and
 Everything downstream (selection, scoring) reads through `canonical()`, so a
 pivot that happens to point at a since-resolved duplicate still works.
 
+### Level 0c — cross-article, per-channel ("never repost this exact picture")
+
+Everything above protects one published album; none of it stops a *different*,
+unrelated article from later reusing the same canonical asset. `Published`
+still counts as `isUsable()` (`MediaStatus::isUsable`) — an asset used in a
+post remains a legitimate picture, just not one a channel should be shown
+twice. Without a separate check, a wire photo or official press image shared
+by two unrelated stories (or pulled in a second time through the event pool,
+or resolved onto an already-published canonical by Level 1/3) reached the
+channel again under a second article's caption.
+
+`media_asset_publications` records, per `(telegram_channel_id, media_asset_id)`,
+that a canonical asset has already been sent. `MediaSelectionService::gatherPool`
+excludes anything in that table for the current channel before scoring even
+starts, so a reused asset simply never enters the pool — the same mechanism
+that stops the same picture reaching one album twice also stops it reaching
+two different ones on the same channel. Scoped per channel like
+`published_posts`, so a second channel starts with its own history.
+
 ## Quality formula
 
 `MediaQualityScorer`, weights in `config('media.quality_weights')`:

@@ -6,7 +6,9 @@ use App\DTOs\ExtractionContext;
 use App\Enums\MediaProvider;
 use App\Enums\MediaStatus;
 use App\Enums\MediaType;
+use App\Models\Event;
 use App\Models\MediaAsset;
+use App\Models\MediaAssetPublication;
 use App\Models\NewsItem;
 use App\Models\Source;
 use App\Models\TelegramChannel;
@@ -487,6 +489,43 @@ class ImageFilteringTest extends TestCase
         $this->assertNull($kept->fresh()->duplicate_of_id);
     }
 
+    public function test_an_event_pool_picture_does_not_duplicate_the_article_s_own_copy(): void
+    {
+        // Event-clustered articles share a media pool (gatherPool() merges the
+        // article's own assets with the event's), so the same real-world photo
+        // can arrive twice under two entirely unrelated MediaAsset rows: one
+        // attached directly to this article, one contributed by a sibling
+        // article into the shared event pool. Neither filename hints they are
+        // the same picture — only the pixels do.
+        $this->mock(ImageDimensionProbe::class)->shouldReceive('probe')->andReturn(false);
+
+        $ownCopy = $this->asset('https://news.mit.edu/files/robot-hand-close-up.jpg', null, 1600, 1000);
+        $eventCopy = $this->asset('https://another-outlet.example.com/img/press-photo-42.jpg', null, 1400, 900);
+        $genuinelyDifferent = $this->asset('https://news.mit.edu/files/lab-exterior.jpg', null, 1200, 800);
+
+        $this->fingerprintsAs([
+            'https://news.mit.edu/files/robot-hand-close-up.jpg' => '30525656c4cc0e1e',
+            'https://another-outlet.example.com/img/press-photo-42.jpg' => '30525656c4cc0e1e',
+            'https://news.mit.edu/files/lab-exterior.jpg' => '0f3c7ac1935a6ef0',
+        ]);
+
+        $event = Event::create(['title' => 'Robot hand demo', 'slug' => 'robot-hand-demo']);
+        $event->mediaAssets()->attach($eventCopy->id, ['relevance_score' => 0.6]);
+
+        $news = $this->newsWith([$ownCopy, $genuinelyDifferent]);
+        $news->update(['event_id' => $event->id]);
+        $news->refresh();
+
+        $plan = app(MediaSelectionService::class)->selectForNewsItem($news, $this->channel());
+        $urls = array_map(fn (MediaAsset $a) => $a->original_url, $plan->assets);
+
+        // Two distinct pictures reach the post — the shared photo only once —
+        // never the same photograph twice because it entered via two pools.
+        $this->assertCount(2, $plan->assets);
+        $this->assertContains($genuinelyDifferent->original_url, $urls);
+        $this->assertNotEquals($urls[0], $urls[1]);
+    }
+
     public function test_near_identical_copies_collapse_but_different_photos_do_not(): void
     {
         // A resized, recompressed copy drifts a few bits; two different photos
@@ -534,5 +573,49 @@ class ImageFilteringTest extends TestCase
             $keys->keysFor($fingerprinted),
             $keys->keysFor($plain),
         ));
+    }
+
+    public function test_an_asset_already_sent_to_the_channel_is_not_selected_for_a_different_article(): void
+    {
+        // MediaStatus::Published still counts as isUsable(), so without a
+        // per-channel publication ledger a wire photo or official press image
+        // reused across two unrelated articles would be picked and sent to the
+        // channel a second time under a second article's caption.
+        $this->neverProbe();
+
+        $channel = TelegramChannel::create(['name' => 'Test', 'chat_id' => '@test', 'rules' => ['min_quality_score' => 0, 'max_images' => 4, 'prefer_video' => false]]);
+
+        $reusedPhoto = $this->asset('https://example.com/press-photo.jpg', null, 1600, 1000);
+        $reusedPhoto->update(['status' => MediaStatus::Published]);
+        MediaAssetPublication::record($channel->id, $reusedPhoto->id);
+
+        $freshPhoto = $this->asset('https://example.com/lab-exterior.jpg', null, 1200, 800);
+
+        $news = $this->newsWith([$reusedPhoto, $freshPhoto]);
+
+        $plan = app(MediaSelectionService::class)->selectForNewsItem($news, $channel);
+        $urls = array_map(fn (MediaAsset $a) => $a->original_url, $plan->assets);
+
+        $this->assertCount(1, $plan->assets);
+        $this->assertSame([$freshPhoto->original_url], $urls);
+    }
+
+    public function test_an_asset_already_sent_to_one_channel_still_reaches_a_different_channel(): void
+    {
+        $this->neverProbe();
+
+        $sentTo = TelegramChannel::create(['name' => 'First', 'chat_id' => '@first', 'rules' => ['min_quality_score' => 0]]);
+        $otherChannel = TelegramChannel::create(['name' => 'Second', 'chat_id' => '@second', 'rules' => ['min_quality_score' => 0]]);
+
+        $photo = $this->asset('https://example.com/press-photo.jpg', null, 1600, 1000);
+        $photo->update(['status' => MediaStatus::Published]);
+        MediaAssetPublication::record($sentTo->id, $photo->id);
+
+        $news = $this->newsWith([$photo]);
+
+        $plan = app(MediaSelectionService::class)->selectForNewsItem($news, $otherChannel);
+
+        $this->assertCount(1, $plan->assets);
+        $this->assertSame($photo->original_url, $plan->assets[0]->original_url);
     }
 }

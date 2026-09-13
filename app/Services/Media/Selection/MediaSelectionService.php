@@ -8,6 +8,7 @@ use App\Enums\MediaStatus;
 use App\Enums\MediaType;
 use App\Enums\PostMediaType;
 use App\Models\MediaAsset;
+use App\Models\MediaAssetPublication;
 use App\Models\NewsItem;
 use App\Models\TelegramChannel;
 use App\Services\Media\Deduplication\RenditionKeyBuilder;
@@ -69,7 +70,7 @@ class MediaSelectionService
 
     public function selectForNewsItem(NewsItem $newsItem, TelegramChannel $channel): PostMediaPlan
     {
-        $pool = $this->gatherPool($newsItem);
+        $pool = $this->gatherPool($newsItem, $channel);
         $poolCount = $pool->count();
         $minQuality = $channel->rule('min_quality_score', 0.35);
 
@@ -141,8 +142,10 @@ class MediaSelectionService
         return $this->planForImages($usable, $channel);
     }
 
-    /** @return Collection<int, MediaAsset> */
-    private function gatherPool(NewsItem $newsItem): Collection
+    /**
+     * @return Collection<int, MediaAsset>
+     */
+    private function gatherPool(NewsItem $newsItem, TelegramChannel $channel): Collection
     {
         $pool = $newsItem->mediaAssets()->get()->keyBy('id');
 
@@ -154,7 +157,38 @@ class MediaSelectionService
             }
         }
 
-        return $pool->map(fn (MediaAsset $a) => $a->canonical())->unique('id')->values();
+        $canonicalPool = $pool->map(fn (MediaAsset $a) => $a->canonical())->unique('id')->values();
+
+        return $this->rejectAlreadySentToChannel($canonicalPool, $channel);
+    }
+
+    /**
+     * `MediaStatus::Published` still counts as `isUsable()` — an asset that
+     * has been sent to a channel remains a legitimate picture, just not one
+     * this channel should be shown twice. Without this, a wire photo or
+     * official press image reused across two unrelated articles (or pulled in
+     * a second time via the event pool, or via Level 1/3 dedup resolving onto
+     * an already-published canonical) reaches the channel again under a
+     * second article's caption. See the media_asset_publications migration.
+     *
+     * @param  Collection<int, MediaAsset>  $pool
+     * @return Collection<int, MediaAsset>
+     */
+    private function rejectAlreadySentToChannel(Collection $pool, TelegramChannel $channel): Collection
+    {
+        // An unpersisted channel (used in tests to exercise selection rules in
+        // isolation) cannot have a publication history — nothing to exclude.
+        if ($channel->id === null) {
+            return $pool;
+        }
+
+        $alreadySent = MediaAssetPublication::alreadySentAssetIds($channel->id, $pool->pluck('id')->all());
+
+        if ($alreadySent === []) {
+            return $pool;
+        }
+
+        return $pool->reject(fn (MediaAsset $a) => in_array($a->id, $alreadySent, true))->values();
     }
 
     /**

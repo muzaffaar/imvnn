@@ -7,6 +7,7 @@ use App\Enums\PostMediaType;
 use App\Enums\ProcessingLogStatus;
 use App\Enums\ProcessingStage;
 use App\Models\MediaAsset;
+use App\Models\MediaAssetPublication;
 use App\Models\MediaProcessingLog;
 use App\Models\NewsItem;
 use App\Models\PublishedPost;
@@ -200,6 +201,13 @@ class PublishToTelegramJob implements ShouldQueue
 
         foreach ($result['published_asset_ids'] ?? [] as $id) {
             MediaAsset::whereKey($id)->update(['status' => MediaStatus::Published]);
+
+            // Recorded per channel, independent of which article it arrived
+            // through, so MediaSelectionService can exclude this exact asset
+            // from every future candidate pool on this channel — see the
+            // media_asset_publications migration for why this is not already
+            // covered by MediaStatus::Published or PublishedPost.
+            MediaAssetPublication::record($channel->id, $id);
         }
 
         PipelineLogger::info('telegram.publish_completed', [
