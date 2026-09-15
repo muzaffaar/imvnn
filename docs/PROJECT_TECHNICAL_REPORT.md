@@ -121,11 +121,17 @@ implemented.
 
 AiArticleAnalyzer sends title plus HTML-stripped normalized article text capped
 at AI_ANALYSIS_MAX_INPUT_CHARS (12,000 default). Its prompt asks for substantive
-AI relevance, clean title, neutral paraphrased summary. Required schema:
+AI relevance, a 0-100 relevance/impact score for a Ministry of Economy and
+Finance audience, clean title, neutral paraphrased summary. Required schema:
 
 ~~~json
-{"is_ai_related": true, "title": "string", "content": "string"}
+{"is_ai_related": true, "score": 0, "title": "string", "content": "string"}
 ~~~
+
+`publish` is not part of the model's response — it is computed in code as
+`is_ai_related && score >= news_sources.ai.min_publish_score` (default 55),
+so the one-call classification stays a single small integer field, and the
+cutoff is tunable without a prompt change.
 
 Defaults are temperature 0.1, 500 output tokens, 20 seconds. GeminiStructuredOutputClient
 uses Gemini JSON-schema output; OpenAiCompatibleStructuredOutputClient supports

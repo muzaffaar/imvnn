@@ -237,20 +237,35 @@ Two layers, in order:
    "m**ai**ntain", since a word boundary requires an actual transition
    between a word and a non-word character.
 2. **Authoritative analysis** (`ArticleAnalyzerInterface`, after the article
-   page is fetched): decides the final title, content, and AI-relevance
+   page is fetched): decides the final title, content, and the `publish`
    verdict that actually gates `NewsItem` creation. Two implementations:
 
    - **`HeuristicArticleAnalyzer`** (free, always succeeds): reuses
      `ArticleContentExtractor`'s parsed title/content and re-runs the same
-     keyword filter from step 1 against the fuller text.
-   - **`AiArticleAnalyzer`**: one structured-output call per
-     candidate does both jobs at once — reads the article's plain text and
-     returns structured JSON (`is_ai_related`, `title`, `content`) using
+     keyword filter from step 1 against the fuller text. It cannot judge
+     government/economic relevance without a model, so `publish` just
+     tracks the keyword verdict (`score` is a nominal 0 or 100).
+   - **`AiArticleAnalyzer`**: one structured-output call per candidate does
+     both jobs at once — reads the article's plain text and returns
+     structured JSON (`is_ai_related`, `score`, `title`, `content`) using
      the configured provider's JSON mode, so the reply is machine-parseable
-     rather than free text to coax into shape. The `content` it returns is a short paraphrase, not verbatim
-     scraped text — a secondary benefit beyond relevance judgment, since a
-     paraphrased excerpt is more defensible to republish than a scraped
-     block of the original site's text.
+     rather than free text to coax into shape. `score` (0-100) is the
+     model's single relevance/impact judgment for this channel's audience —
+     Ministry of Economy and Finance staff and leadership — weighing
+     government/public-administration AI, macroeconomic impact, public
+     finance, banking/financial supervision, labor automation, AI
+     investment/regulation/geopolitics, fraud/procurement detection,
+     government-relevant cybersecurity, and extraordinary AI developments,
+     while scoring down routine product updates and narrow low-impact
+     stories (see the prompt in `AiArticleAnalyzer::prompt()`). The model is
+     not asked for a separate `publish` boolean — that is computed
+     deterministically in code as `is_ai_related && score >=
+     news_sources.ai.min_publish_score`, so the cutoff is tunable via config
+     without touching the prompt or paying for another output field. The
+     `content` it returns is a short paraphrase, not verbatim scraped text —
+     a secondary benefit beyond relevance judgment, since a paraphrased
+     excerpt is more defensible to republish than a scraped block of the
+     original site's text.
 
    `FallbackArticleAnalyzer` is what `NewsIngestionService` actually depends
    on: it calls the AI provider only when configured (`AI_API_KEY` set **and**
@@ -298,9 +313,10 @@ Both relevance gates above answer to one switch,
 `news_sources.topic_filter.enabled` (`NEWS_TOPIC_FILTER_ENABLED`, default on),
 read through `TopicPolicy`:
 
-- on — the keyword prefilter applies, and the analyzer's `is_ai_related`
-  verdict gates `NewsItem` creation. The channel carries AI, machine learning
-  and robotics only.
+- on — the keyword prefilter applies, and the analyzer's `publish`
+  verdict (AI-related **and** scored high enough for this channel's
+  audience) gates `NewsItem` creation. The channel carries AI, machine
+  learning and robotics only, filtered for government/economic relevance.
 - off — every candidate is on-topic, and only freshness and deduplication
   decide what is ingested. This is the setting for bringing a channel up,
   when you want to see the pipeline move before narrowing what it carries.

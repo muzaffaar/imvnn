@@ -29,8 +29,11 @@ class SyncNewsSourcesCommand extends Command
             return self::SUCCESS;
         }
 
+        $slugs = [];
+
         foreach ($sources as $entry) {
             $slug = $entry['slug'] ?? Str::slug($entry['name']);
+            $slugs[] = $slug;
 
             Source::updateOrCreate(
                 ['slug' => $slug],
@@ -49,7 +52,20 @@ class SyncNewsSourcesCommand extends Command
             $this->info("Synced: {$entry['name']} ({$slug})");
         }
 
-        PipelineLogger::info('news.source_sync_completed', ['source_count' => count($sources)]);
+        // A source removed from config (e.g. retired for editorial reasons)
+        // must stop being fetched, not just stop being upserted — FetchNewsSourcesCommand
+        // dispatches by `is_active`, so a row left active here would keep being
+        // crawled forever with no config entry pointing at it.
+        $deactivated = Source::whereNotIn('slug', $slugs)->where('is_active', true)->get();
+        foreach ($deactivated as $source) {
+            $source->update(['is_active' => false]);
+            $this->info("Deactivated (no longer in config): {$source->name} ({$source->slug})");
+        }
+
+        PipelineLogger::info('news.source_sync_completed', [
+            'source_count' => count($sources),
+            'deactivated_count' => $deactivated->count(),
+        ]);
 
         return self::SUCCESS;
     }

@@ -44,17 +44,29 @@ return [
     | see docs/MEDIA_ARCHITECTURE.md.
     */
     'sources' => [
-        ['name' => 'MIT News — Robotics', 'slug' => 'mit-news-robotics', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/topic/mitrobotics-rss.xml', 'reliability_score' => 90, 'media_reuse_permitted' => false],
         ['name' => 'Google Blog', 'slug' => 'google-blog', 'fetch_type' => 'rss', 'url' => 'https://blog.google/rss/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
 
         // Anthropic has no discoverable RSS feed — crawled instead.
         ['name' => 'Anthropic News', 'slug' => 'anthropic-news', 'fetch_type' => 'html_crawl', 'url' => 'https://www.anthropic.com/news', 'reliability_score' => 95, 'media_reuse_permitted' => false],
         ['name' => 'Hugging Face Blog', 'slug' => 'huggingface-blog', 'fetch_type' => 'rss', 'url' => 'https://huggingface.co/blog/feed.xml', 'reliability_score' => 80, 'media_reuse_permitted' => false],
         ['name' => 'Mistral AI News', 'slug' => 'mistral-ai-news', 'fetch_type' => 'rss', 'url' => 'https://mistral.ai/rss.xml', 'reliability_score' => 90, 'media_reuse_permitted' => false],
-        ['name' => 'MIT News — Artificial Intelligence', 'slug' => 'mit-news-ai', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/rss/topic/artificial-intelligence2', 'reliability_score' => 90, 'media_reuse_permitted' => false],
-        ['name' => 'MIT News — All', 'slug' => 'mit-news-all', 'fetch_type' => 'rss', 'url' => 'https://news.mit.edu/rss/feed', 'reliability_score' => 90, 'media_reuse_permitted' => false],
         ['name' => 'Google Research Blog', 'slug' => 'google-research-blog', 'fetch_type' => 'rss', 'url' => 'https://research.google/blog/rss/', 'reliability_score' => 90, 'media_reuse_permitted' => false],
-        ['name' => 'MIT Technology Review — AI', 'slug' => 'mit-technology-review-ai', 'fetch_type' => 'rss', 'url' => 'https://www.technologyreview.com/topic/artificial-intelligence/feed/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
+
+        // Independent tech/business journalism, added September 2026 for
+        // broader economic/policy coverage than the vendor blogs above.
+        // Each URL below is the category feed itself (verified 200,
+        // application/rss+xml or atom+xml) — see docs/SOURCE_CURATION.md.
+        ['name' => 'TechCrunch — AI', 'slug' => 'techcrunch-ai', 'fetch_type' => 'rss', 'url' => 'https://techcrunch.com/category/artificial-intelligence/feed/', 'reliability_score' => 85, 'media_reuse_permitted' => false],
+        ['name' => 'Ars Technica — AI', 'slug' => 'arstechnica-ai', 'fetch_type' => 'rss', 'url' => 'https://arstechnica.com/ai/feed/', 'reliability_score' => 88, 'media_reuse_permitted' => false],
+        ['name' => 'The Verge — AI', 'slug' => 'theverge-ai', 'fetch_type' => 'rss', 'url' => 'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml', 'reliability_score' => 85, 'media_reuse_permitted' => false],
+        // FT's article pages are subscription-paywalled beyond the opening
+        // paragraph; the feed's own title/description still carries enough
+        // signal for finance/economy-relevant headlines. Reuters was also
+        // evaluated but has no public RSS feed and actively blocks
+        // automated fetching (DataDome challenge on every request) — not
+        // added.
+        ['name' => 'Financial Times — AI', 'slug' => 'ft-ai', 'fetch_type' => 'rss', 'url' => 'https://www.ft.com/artificial-intelligence?format=rss', 'reliability_score' => 90, 'media_reuse_permitted' => false],
+
         // Official primary sources, verified September 2026. Prefer feeds
         // whenever available: they are cheaper, carry dates, and avoid brittle
         // browser-like crawling of each vendor's listing page.
@@ -263,9 +275,10 @@ return [
     |--------------------------------------------------------------------------
     |
     | Optional: one AI-provider call per candidate article both cleans up its
-    | title/content AND judges AI-relevance, replacing the free heuristic
-    | path (ArticleContentExtractor + keyword AiRelevanceFilter) — see
-    | AiArticleAnalyzer and docs/NEWS_FETCHING.md "AI analysis".
+    | title/content AND scores it for this channel's audience — Ministry of
+    | Economy and Finance staff and leadership — replacing the free
+    | heuristic path (ArticleContentExtractor + keyword AiRelevanceFilter)
+    | — see AiArticleAnalyzer and docs/NEWS_FETCHING.md "AI analysis".
     |
     | Disabled automatically if AI_API_KEY is empty, regardless of
     | `enabled` below. When enabled, any provider failure (network error,
@@ -276,16 +289,23 @@ return [
     | Cost control, both per the "per-call output cap + input truncation"
     | approach (no cross-request budget tracking):
     |   - `max_output_tokens` caps generationConfig.maxOutputTokens on every
-    |     call — the response is just {is_ai_related, title, content}, so
-    |     this can stay small.
+    |     call — the response is just {is_ai_related, score, title,
+    |     content}, so this can stay small.
     |   - `max_input_chars` truncates the plain-text article body sent to
     |     the model (~4 chars/token, so 12000 chars is roughly 3000 input
     |     tokens) — bounds cost on the input side regardless of article length.
+    |
+    | `min_publish_score` is the deterministic cutoff applied in code to the
+    | model's 0-100 relevance/impact score (AiArticleAnalyzer computes
+    | `publish` from `is_ai_related && score >= min_publish_score`, rather
+    | than asking the model for a redundant boolean) — tune this to make the
+    | channel stricter or looser without touching the prompt.
     */
     'ai' => [
         'enabled' => env('AI_ANALYSIS_ENABLED', env('GEMINI_ANALYSIS_ENABLED', true)),
         'max_output_tokens' => env('AI_ANALYSIS_MAX_OUTPUT_TOKENS', env('GEMINI_MAX_OUTPUT_TOKENS', 500)),
         'max_input_chars' => env('AI_ANALYSIS_MAX_INPUT_CHARS', env('GEMINI_MAX_INPUT_CHARS', 12000)),
         'timeout_seconds' => env('AI_ANALYSIS_TIMEOUT_SECONDS', env('GEMINI_TIMEOUT_SECONDS', 20)),
+        'min_publish_score' => env('AI_ANALYSIS_MIN_PUBLISH_SCORE', 55),
     ],
 ];

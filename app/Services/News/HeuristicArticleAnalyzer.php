@@ -23,6 +23,16 @@ class HeuristicArticleAnalyzer implements ArticleAnalyzerInterface
 
         $isAiRelated = $this->aiFilter->isRelevant(($title ?? '').' '.($content ?? ''));
 
-        return new ArticleAnalysisResult($isAiRelated, $title, $content, analyzedBy: 'heuristic');
+        // No model call here, so no real relevance/impact score is possible —
+        // publish tracks the keyword verdict only, same as before this field
+        // existed. See AiArticleAnalyzer for the scored path.
+        return new ArticleAnalysisResult(
+            $isAiRelated,
+            $title,
+            $content,
+            analyzedBy: 'heuristic',
+            score: $isAiRelated ? 100 : 0,
+            publish: $isAiRelated,
+        );
     }
 }

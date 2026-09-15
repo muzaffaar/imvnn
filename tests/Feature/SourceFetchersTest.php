@@ -178,7 +178,7 @@ class SourceFetchersTest extends TestCase
         $analyzer = $this->mock(ArticleAnalyzerInterface::class);
         $analyzer->shouldReceive('analyze')
             ->once()
-            ->andReturn(new ArticleAnalysisResult(true, 'OpenAI model update', 'Feed-provided article summary.', 'heuristic'));
+            ->andReturn(new ArticleAnalysisResult(true, 'OpenAI model update', 'Feed-provided article summary.', 'heuristic', score: 80, publish: true));
 
         $service = new NewsIngestionService(
             $this->boundedFetcher([new Response(403)]),

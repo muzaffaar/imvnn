@@ -114,12 +114,12 @@ class NewsIngestionService
             return null; // nothing usable to publish under
         }
 
-        // The model still judges relevance on every call, but its verdict only
-        // decides anything while the topic filter is on. Honouring it anyway
-        // would undo the bypass one stage late, after the fetch and the model
-        // call had already been paid for.
-        if ($this->topicPolicy->enabled() && ! $analysis->isAiRelated) {
-            $this->logSkip($source, $candidate, 'analysis_not_ai_related');
+        // The model still judges relevance/impact on every call, but its
+        // verdict only decides anything while the topic filter is on.
+        // Honouring it anyway would undo the bypass one stage late, after the
+        // fetch and the model call had already been paid for.
+        if ($this->topicPolicy->enabled() && ! $analysis->publish) {
+            $this->logSkip($source, $candidate, 'analysis_not_publishable', ['score' => $analysis->score]);
 
             return null;
         }
