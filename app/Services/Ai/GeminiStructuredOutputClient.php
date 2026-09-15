@@ -17,6 +17,7 @@ class GeminiStructuredOutputClient implements StructuredOutputClientInterface
         int $maxOutputTokens,
         float $temperature,
         int $timeoutSeconds,
+        array $images = [],
     ): array {
         $apiKey = config('services.ai.api_key');
         if (! is_string($apiKey) || $apiKey === '') {
@@ -33,11 +34,17 @@ class GeminiStructuredOutputClient implements StructuredOutputClientInterface
 
         $startedAt = microtime(true);
 
+        $parts = array_map(
+            fn (array $image) => ['inlineData' => ['mimeType' => $image['mime_type'], 'data' => $image['data']]],
+            $images,
+        );
+        $parts[] = ['text' => $prompt];
+
         try {
             $response = $this->client->post('v1beta/models/'.config('services.ai.model').':generateContent', [
                 'query' => ['key' => $apiKey],
                 'json' => [
-                    'contents' => [['parts' => [['text' => $prompt]]]],
+                    'contents' => [['parts' => $parts]],
                     'generationConfig' => [
                         'maxOutputTokens' => $maxOutputTokens,
                         'temperature' => $temperature,

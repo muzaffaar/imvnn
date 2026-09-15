@@ -18,6 +18,7 @@ class OpenAiCompatibleStructuredOutputClient implements StructuredOutputClientIn
         int $maxOutputTokens,
         float $temperature,
         int $timeoutSeconds,
+        array $images = [],
     ): array {
         $apiKey = config('services.ai.api_key');
 
@@ -33,7 +34,7 @@ class OpenAiCompatibleStructuredOutputClient implements StructuredOutputClientIn
                     'role' => 'system',
                     'content' => 'Return only a valid JSON object matching the requested schema. Do not use Markdown fences.',
                 ],
-                ['role' => 'user', 'content' => $prompt],
+                ['role' => 'user', 'content' => $this->userContent($prompt, $images)],
             ],
             'temperature' => $temperature,
             $maxTokensField => $maxOutputTokens,
@@ -103,6 +104,30 @@ class OpenAiCompatibleStructuredOutputClient implements StructuredOutputClientIn
         }
 
         return $decoded;
+    }
+
+    /**
+     * Plain string content when there are no images — matches every
+     * OpenAI-compatible server, including ones that don't understand the
+     * multimodal content-parts array at all. Only switches shape when an
+     * image is actually attached (see StructuredOutputClientInterface).
+     *
+     * @param  list<array{mime_type: string, data: string}>  $images
+     * @return string|list<array<string, mixed>>
+     */
+    private function userContent(string $prompt, array $images): string|array
+    {
+        if ($images === []) {
+            return $prompt;
+        }
+
+        $parts = array_map(
+            fn (array $image) => ['type' => 'image_url', 'image_url' => ['url' => "data:{$image['mime_type']};base64,{$image['data']}"]],
+            $images,
+        );
+        $parts[] = ['type' => 'text', 'text' => $prompt];
+
+        return $parts;
     }
 
     /** @param array<string, mixed> $body @param array<string, mixed> $schema */

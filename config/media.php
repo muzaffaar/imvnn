@@ -220,6 +220,21 @@ return [
         'keyword_overlap_weight' => 0.4,
         'position_weight' => 0.3,
         'extractor_source_weight' => 0.3,
+
+        // The vision-model pass itself — see AiVisionRelevanceAnalyzer /
+        // FallbackVisionRelevanceAnalyzer. Disabled automatically if
+        // AI_API_KEY is empty, regardless of `ai_enabled` below. Only ever
+        // called for the small shortlist above, so per-call cost is bounded
+        // by that shortlist size, not by the article volume.
+        'ai_enabled' => env('AI_VISION_RELEVANCE_ENABLED', true),
+        // Response is just {relevance_score}, so this stays tiny.
+        'ai_max_output_tokens' => env('AI_VISION_RELEVANCE_MAX_OUTPUT_TOKENS', 20),
+        'ai_timeout_seconds' => env('AI_VISION_RELEVANCE_TIMEOUT_SECONDS', 20),
+
+        // An image above this size is skipped (cheap-score fallback) rather
+        // than base64-inlined into a request — keeps a single call bounded
+        // regardless of how large the original download was.
+        'max_vision_image_bytes' => env('AI_VISION_RELEVANCE_MAX_IMAGE_BYTES', 4 * 1024 * 1024),
     ],
 
     /*
@@ -290,7 +305,10 @@ return [
         'fallback_to_original_language' => env('TELEGRAM_CAPTION_FALLBACK_ORIGINAL', false),
 
         'ai_enabled' => env('AI_CAPTION_ENABLED', env('GEMINI_CAPTION_ENABLED', true)),
-        'max_output_tokens' => env('AI_CAPTION_MAX_OUTPUT_TOKENS', env('GEMINI_CAPTION_MAX_OUTPUT_TOKENS', 400)),
+        // Sized for a concrete, fact-dense post (roughly 500-900 characters
+        // of body text) rather than the 2-3 sentence teaser this used to
+        // cap output at — see AiCaptionComposer.
+        'max_output_tokens' => env('AI_CAPTION_MAX_OUTPUT_TOKENS', env('GEMINI_CAPTION_MAX_OUTPUT_TOKENS', 700)),
         'max_input_chars' => env('AI_CAPTION_MAX_INPUT_CHARS', env('GEMINI_CAPTION_MAX_INPUT_CHARS', 4000)),
         'timeout_seconds' => env('AI_CAPTION_TIMEOUT_SECONDS', env('GEMINI_CAPTION_TIMEOUT_SECONDS', 20)),
     ],

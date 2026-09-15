@@ -10,7 +10,7 @@ use App\Services\Media\Extraction\HtmlContentExtractor;
 use App\Services\Media\Extraction\HtmlMetadataExtractor;
 use App\Services\Media\Extraction\MediaExtractionManager;
 use App\Services\Media\Extraction\RssMediaExtractor;
-use App\Services\Media\Scoring\NullVisionRelevanceAnalyzer;
+use App\Services\Media\Scoring\FallbackVisionRelevanceAnalyzer;
 use App\Services\Media\Scoring\VisionRelevanceAnalyzerInterface;
 use App\Services\Telegram\CaptionComposerInterface;
 use App\Services\Telegram\FallbackCaptionComposer;
@@ -38,7 +38,7 @@ class MediaServiceProvider extends ServiceProvider
         $this->app->bind(EmbeddingSimilarityDetectorInterface::class, NullEmbeddingSimilarityDetector::class);
         $this->app->bind(
             VisionRelevanceAnalyzerInterface::class,
-            NullVisionRelevanceAnalyzer::class,
+            FallbackVisionRelevanceAnalyzer::class,
         );
 
         $this->app->singleton(MediaExtractionManager::class, function ($app) {

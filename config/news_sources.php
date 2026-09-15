@@ -290,7 +290,10 @@ return [
     | approach (no cross-request budget tracking):
     |   - `max_output_tokens` caps generationConfig.maxOutputTokens on every
     |     call — the response is just {is_ai_related, score, title,
-    |     content}, so this can stay small.
+    |     content}. `content` is a fact-dense extraction (not a one-line
+    |     summary), which is what the caption composer grounds the actual
+    |     Telegram post in, so this is sized for ~400-900 characters of
+    |     prose plus the JSON overhead, not just a couple of sentences.
     |   - `max_input_chars` truncates the plain-text article body sent to
     |     the model (~4 chars/token, so 12000 chars is roughly 3000 input
     |     tokens) — bounds cost on the input side regardless of article length.
@@ -303,7 +306,7 @@ return [
     */
     'ai' => [
         'enabled' => env('AI_ANALYSIS_ENABLED', env('GEMINI_ANALYSIS_ENABLED', true)),
-        'max_output_tokens' => env('AI_ANALYSIS_MAX_OUTPUT_TOKENS', env('GEMINI_MAX_OUTPUT_TOKENS', 500)),
+        'max_output_tokens' => env('AI_ANALYSIS_MAX_OUTPUT_TOKENS', env('GEMINI_MAX_OUTPUT_TOKENS', 700)),
         'max_input_chars' => env('AI_ANALYSIS_MAX_INPUT_CHARS', env('GEMINI_MAX_INPUT_CHARS', 12000)),
         'timeout_seconds' => env('AI_ANALYSIS_TIMEOUT_SECONDS', env('GEMINI_TIMEOUT_SECONDS', 20)),
         'min_publish_score' => env('AI_ANALYSIS_MIN_PUBLISH_SCORE', 55),

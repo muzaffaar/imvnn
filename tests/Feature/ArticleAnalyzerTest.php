@@ -75,6 +75,63 @@ class ArticleAnalyzerTest extends TestCase
         $this->assertFalse($result->publish);
     }
 
+    public function test_extraordinary_global_breakthrough_is_accepted_without_an_explicit_government_angle(): void
+    {
+        config(['news_sources.ai.min_publish_score' => 55]);
+
+        // No government/economy keyword at all — the prompt explicitly asks
+        // the model to still score high when the strategic/economic impact
+        // is substantial on its own.
+        $analyzer = new AiArticleAnalyzer($this->fakeClient([
+            'is_ai_related' => true,
+            'score' => 90,
+            'title' => 'Researchers unveil model that solves previously unsolved math problem',
+            'content' => 'A fact-dense extraction of the breakthrough.',
+        ]));
+
+        $result = $analyzer->analyze($this->candidate(), $this->parsed(), '<html>body</html>');
+
+        $this->assertTrue($result->publish);
+    }
+
+    public function test_marketing_disguised_as_news_is_rejected(): void
+    {
+        config(['news_sources.ai.min_publish_score' => 55]);
+
+        $analyzer = new AiArticleAnalyzer($this->fakeClient([
+            'is_ai_related' => true,
+            'score' => 15,
+            'title' => 'Why our new AI assistant will change how you work',
+            'content' => 'Promotional copy with no concrete news.',
+        ]));
+
+        $result = $analyzer->analyze($this->candidate(), $this->parsed(), '<html>body</html>');
+
+        $this->assertFalse($result->publish);
+    }
+
+    public function test_prompt_asks_for_fact_dense_extraction_not_a_vague_summary(): void
+    {
+        $captured = null;
+        $client = new class($captured) implements StructuredOutputClientInterface
+        {
+            public string $captured = '';
+
+            public function generate(string $operation, string $prompt, array $schema, int $maxOutputTokens, float $temperature, int $timeoutSeconds, array $images = []): array
+            {
+                $this->captured = $prompt;
+
+                return ['is_ai_related' => true, 'score' => 80, 'title' => 'Title', 'content' => 'Content'];
+            }
+        };
+
+        (new AiArticleAnalyzer($client))->analyze($this->candidate(), $this->parsed(), '<html>body</html>');
+
+        $this->assertStringContainsString('never invent a', $client->captured);
+        $this->assertStringContainsString('what happened', $client->captured);
+        $this->assertStringContainsString('marketing disguised as news', $client->captured);
+    }
+
     public function test_score_exactly_at_the_threshold_publishes(): void
     {
         config(['news_sources.ai.min_publish_score' => 55]);
@@ -161,6 +218,7 @@ class ArticleAnalyzerTest extends TestCase
                 int $maxOutputTokens,
                 float $temperature,
                 int $timeoutSeconds,
+                array $images = [],
             ): array {
                 return $this->response;
             }

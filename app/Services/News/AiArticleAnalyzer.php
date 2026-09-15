@@ -88,8 +88,22 @@ class AiArticleAnalyzer implements ArticleAnalyzerInterface
             narrow low-impact applications, generic tutorials/research,
             repetitive stories.
 
-            Also produce a clean title and a brief neutral summary (your own
-            words, a few sentences) of the article's actual content.
+            Score low also for: marketing disguised as news, and vague
+            opinion pieces that carry no important new information.
+
+            Also produce a clean title and a fact-dense extraction (your own
+            words) of what the article actually reports — not a vague
+            summary. Cover, wherever the source supports it: what happened;
+            who (company/researchers/government) did it; why it was built or
+            what problem it addresses; how it works in concrete terms; what
+            is different from before; any measurable result or outcome
+            stated; and realistic real-world applications. Keep every name,
+            number, date and quantity exactly as stated — never invent a
+            detail the article does not support. Write flowing prose (not a
+            list), in the article's own language, long enough to hold these
+            facts (roughly 400-900 characters) but no longer than the
+            source justifies. If the article itself is thin, write less
+            rather than padding it.
 
             Article title (may be imprecise or missing): {$title}
 
