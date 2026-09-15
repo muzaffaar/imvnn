@@ -84,7 +84,10 @@ class AiArticleAnalyzer implements ArticleAnalyzerInterface
             security/strategic impact is real. Low: routine product
             updates, generic tutorials/research, repetitive stories,
             marketing disguised as news, vague opinion pieces with no real
-            news.
+            news, and event/summit color — a public figure's quotes, a
+            photo-op, or a soundbite reaction (e.g. "is AI dangerous?"
+            punditry) — even when it name-drops policy or economic stakes,
+            unless it reports an actual decision, deal, figure, or new fact.
 
             title: clean version. content: fact-dense extraction (your own
             words, not a vague summary) covering what happened, who did it,
