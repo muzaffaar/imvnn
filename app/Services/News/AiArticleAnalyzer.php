@@ -65,50 +65,35 @@ class AiArticleAnalyzer implements ArticleAnalyzerInterface
     private function prompt(string $title, string $text): string
     {
         return <<<PROMPT
-            Classify this article for a Ministry of Economy and Finance AI news
-            brief. No explanations — JSON only.
+            Classify this article for a Ministry of Economy and Finance AI
+            brief. JSON only, no explanations.
 
-            is_ai_related: substantively about AI/ML/robotics (research, models,
-            companies, products, regulation, applications), not a passing mention.
+            is_ai_related: substantively about AI/ML/robotics, not a passing
+            mention.
 
-            score (0-100): relevance/importance to ministry leadership. Score high
-            for: government/public-administration AI; GDP, productivity,
-            macroeconomic impact; public finance, tax, customs, budget, spending;
-            banking, central banks, financial supervision; labor markets and
-            automation; AI investment and national infrastructure; AI regulation,
-            national strategy, geopolitics; fraud/corruption/procurement
-            detection; economic/financial forecasting and government data;
-            government/finance-relevant cybersecurity; major AI company/model
-            developments with real economic stakes; extraordinary AI
-            breakthroughs leaders should know; foreign AI deployments realistically
-            applicable to Uzbekistan. A globally significant AI breakthrough can
-            still score high with no explicit government/economy angle if its
-            economic, labor, security or strategic impact is substantial. Score
-            low for: minor product/model updates, routine company announcements,
-            narrow low-impact applications, generic tutorials/research,
-            repetitive stories.
+            score (0-100), relevance to ministry leadership. High:
+            government/public-administration AI; GDP/productivity/macro
+            impact; tax, customs, budget; banking/central banks/financial
+            supervision; labor markets/automation; AI investment/
+            infrastructure; AI regulation/strategy/geopolitics; fraud/
+            corruption/procurement detection; economic forecasting; gov/
+            finance cybersecurity; major model developments with real
+            economic stakes; extraordinary breakthroughs; deployments
+            realistic for Uzbekistan. A major global breakthrough can score
+            high with no explicit gov/economy angle if its economic/labor/
+            security/strategic impact is real. Low: routine product
+            updates, generic tutorials/research, repetitive stories,
+            marketing disguised as news, vague opinion pieces with no real
+            news.
 
-            Score low also for: marketing disguised as news, and vague
-            opinion pieces that carry no important new information.
+            title: clean version. content: fact-dense extraction (your own
+            words, not a vague summary) covering what happened, who did it,
+            why/how, what's new, and any concrete result — exact names/
+            numbers/dates only, never invent a detail the source doesn't
+            support, ~400-900 chars, less if the source is thin.
 
-            Also produce a clean title and a fact-dense extraction (your own
-            words) of what the article actually reports — not a vague
-            summary. Cover, wherever the source supports it: what happened;
-            who (company/researchers/government) did it; why it was built or
-            what problem it addresses; how it works in concrete terms; what
-            is different from before; any measurable result or outcome
-            stated; and realistic real-world applications. Keep every name,
-            number, date and quantity exactly as stated — never invent a
-            detail the article does not support. Write flowing prose (not a
-            list), in the article's own language, long enough to hold these
-            facts (roughly 400-900 characters) but no longer than the
-            source justifies. If the article itself is thin, write less
-            rather than padding it.
-
-            Article title (may be imprecise or missing): {$title}
-
-            Article text (may include boilerplate/navigation noise — ignore it):
-            {$text}
+            Title: {$title}
+            Text (ignore boilerplate/nav noise): {$text}
             PROMPT;
     }
 

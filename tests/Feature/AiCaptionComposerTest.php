@@ -43,9 +43,8 @@ class AiCaptionComposerTest extends TestCase
     {
         $capturedPrompt = $this->composeAndCapturePrompt();
 
-        $this->assertStringContainsString('genuinely supports one', $capturedPrompt);
-        $this->assertStringContainsString('omit it entirely rather than', $capturedPrompt);
-        $this->assertStringContainsString('force one', $capturedPrompt);
+        $this->assertStringContainsString('genuinely support', $capturedPrompt);
+        $this->assertStringContainsString('otherwise omit it', $capturedPrompt);
     }
 
     public function test_compose_does_not_truncate_a_grounded_post_down_to_a_short_teaser(): void

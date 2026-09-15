@@ -94,28 +94,16 @@ class AiVisionRelevanceAnalyzer implements VisionRelevanceAnalyzerInterface
         $context = Str::limit(strip_tags((string) $newsItem->content), 600);
 
         return <<<PROMPT
-            You are picking the best image for a Telegram news post about
-            this story. No explanations — JSON only.
+            Score how well the attached image depicts THIS story's specific
+            subject (not just a generic AI/tech picture). JSON only.
 
-            Article title: {$title}
-            Article facts: {$context}
+            Title: {$title}
+            Facts: {$context}
 
-            Look at the attached image and score how well it actually
-            depicts THIS story's specific subject (the event, product,
-            research, person, place, chart, or diagram described above) —
-            not merely a plausible AI/tech-themed picture.
-
-            relevance_score (0-100):
-            90-100: directly shows the specific subject/event/product/
-              research/people described above
-            60-89: an official or genuinely on-topic illustration, chart, or
-              diagram for this story
-            30-59: generic but topic-adjacent (loosely related stock/context
-              image)
-            0-29: unrelated to this story, decorative, a logo/icon/UI
-              element, an avatar/headshot, an advertisement, a navigation
-              asset, or a generic stock photo with no real connection to
-              what happened
+            relevance_score (0-100): 90-100 shows the exact subject/event/
+            people; 60-89 on-topic official illustration/chart; 30-59
+            generic but related; 0-29 unrelated, decorative, logo/icon/
+            avatar/ad/nav asset, or generic stock photo.
             PROMPT;
     }
 

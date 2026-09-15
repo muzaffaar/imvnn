@@ -86,85 +86,50 @@ class AiCaptionComposer implements CaptionComposerInterface
         $languageList = $count === 1 ? $names[0] : implode(' and ', [implode(', ', array_slice($names, 0, -1)), end($names)]);
         $postWord = $count === 1 ? 'ONE post' : $count.' posts';
         $sharedNote = $count === 1
-            ? 'It has to fit a 1024-character Telegram caption — aim for roughly 500-900 characters of body text, enough to be concrete rather than a one-line teaser, and anything over the limit is trimmed automatically.'
-            : 'The posts share a single 1024-character Telegram caption, so keep each one concise enough for that shared budget — anything over it is trimmed automatically.';
+            ? 'Fits a 1024-char Telegram caption (~500-900 chars of body is a good target); excess is auto-trimmed.'
+            : 'Posts share one 1024-char caption — keep each concise; excess is auto-trimmed.';
         $languageRequirement = $count === 1 && ($languages[0]['key'] ?? null) === 'uzbek'
             ? <<<'RULE'
-                Uzbek is mandatory: write the headline and body in natural,
-                professional Uzbek using the Latin alphabet. Do not write
-                English or Russian sentences, and do not use Cyrillic.
-
-                Keep established international AI/tech/business terms in their
-                standard English form instead of translating them into
-                artificial Uzbek equivalents — for example: AI, ML, LLM, API,
-                GPU, CPU, AGI, RAG, NLP, AI agent, Machine Learning, Deep
-                Learning, Generative AI, Open Source, fine-tuning, prompt,
+                Uzbek, Latin script only (no Russian sentences, no Cyrillic).
+                Keep established terms in English, not translated: AI, ML,
+                LLM, API, GPU, CPU, AGI, RAG, NLP, AI agent, Machine
+                Learning, Deep Learning, Generative AI, fine-tuning, prompt,
                 token, dataset, benchmark, transformer, inference, training,
-                cloud, model, chatbot, fintech, big data, blockchain,
-                cybersecurity, data center. Never translate company, product
-                or model names (OpenAI, ChatGPT, Claude, Gemini, NVIDIA, AWS,
-                and so on) — copy them exactly. Write everything else —
-                ordinary verbs, connectors, explanations — in natural Uzbek;
-                do not overuse English beyond these established terms.
+                model, chatbot, fintech, blockchain, cybersecurity.
+
+                Never translate company, product or model names (OpenAI,
+                ChatGPT, Claude, Gemini, NVIDIA...) — copy exactly.
+                Everything else: natural Uzbek.
                 RULE
             : 'Write ONLY in the requested language(s) — no English.';
 
         $prompt = <<<PROMPT
-            You are writing a post for a Telegram news channel read by staff
-            and leadership of a Ministry of Economy and Finance. The reader is
-            not a technologist and must understand exactly what happened
-            without opening the source article.
+            Telegram post for Ministry of Economy and Finance staff — a
+            non-technical reader who must understand what happened without
+            opening the source.
 
-            Article title: {$title}
+            Title: {$title}
+            Facts: {$body}{$videoNote}
 
-            Article facts: {$body}{$videoNote}
+            Write {$postWord}, in {$languageList}. {$languageRequirement}
+            Headline under 70 chars, specific — not a copy of the title.
 
-            Write {$postWord}, in: {$languageList}. {$languageRequirement}
-            Give each one a short, clear, specific headline (under 70
-            characters) in its own language — not a repeat of the article
-            title.
+            Plain prose (no headings/bullets) covering, only as far as facts
+            support: what happened and who did it; why/how, in plain terms;
+            the concrete result; and — only when the facts genuinely support
+            one, otherwise omit it — a government/economy/Uzbekistan angle.
 
-            Write flowing prose (no headings, no labeled sections, no bullet
-            list) that covers, in this order, only as far as the facts above
-            support it:
-            1. What actually happened and who did it (company, researchers,
-               government) — concretely, never a vague genre statement.
-            2. Why it was built/found, or what problem it addresses, and how
-               it works, in plain terms.
-            3. The concrete result or outcome the article states.
-            4. Why this is practically significant, including a specific
-               government/economy/finance/Uzbekistan connection ONLY when the
-               article genuinely supports one — omit it entirely rather than
-               force one.
+            Never write a vague, contentless sentence (e.g. "AI rivojlanishi
+            xavfsizlik muammolarini keltirib chiqarmoqda") — every sentence
+            must add a concrete fact: what, who, how, what changed.
 
-            Never write a vague, contentless sentence such as "AI
-            rivojlanishi xavfsizlik muammolarini keltirib chiqarmoqda" or
-            "Kompaniya AI asosidagi moliyaviy tizim yaratdi" that leaves the
-            reader not knowing what actually happened. Every sentence must
-            add a concrete fact — what was built, found, or decided, by whom,
-            how, and what changed — not a generic conclusion like "bu
-            texnologiya kelajakda foydali bo'lishi mumkin."
+            Match the story's tone; up to 2-3 emoji. {$sharedNote}
 
-            Match whatever tone genuinely fits the story — formal, dramatic,
-            warm, or serious — rather than forcing one fixed style. At most
-            two or three emoji in total, and only where they genuinely fit.
+            Use ONLY facts given above — no invented names/figures/dates;
+            write less if facts are thin.
 
-            {$sharedNote}
-
-            Use ONLY facts stated above. Do not add background, figures,
-            dates or names that aren't there, and do not overstate what
-            happened — the headline must be supported by the body. If the
-            article facts are thin, write less rather than filling the gap
-            with vague language. Copy names, numbers and dates exactly as
-            they appear.
-
-            Also pick 2-4 topical hashtag words (no "#", no spaces, letters
-            and digits only, all lowercase) — e.g. the model, company, or
-            field the story is about.
-
-            Do not add any URL yourself. The application always adds the
-            direct source link separately. Do not mention the source's name
-            — it is added separately.
+            Pick 2-4 lowercase hashtag words (letters/digits only, no "#").
+            Do not add a URL or mention the source — added separately.
             PROMPT;
 
         return $this->client->generate(
