@@ -108,6 +108,19 @@ class NewsIngestionService
 
         $analysis = $this->articleAnalyzer->analyze($candidate, $heuristicParse, $rawHtml);
 
+        // Unconditional, independent of the topic filter and the skip-log
+        // toggle below — this is the only place the model's score is
+        // recorded for articles that end up published, so it's what lets us
+        // observe the real score distribution (e.g. to tune
+        // AI_ANALYSIS_MIN_PUBLISH_SCORE) instead of guessing from the prompt.
+        PipelineLogger::info('news.analysis_scored', $this->candidateContext($source, $candidate) + [
+            'is_ai_related' => $analysis->isAiRelated,
+            'score' => $analysis->score,
+            'min_publish_score' => (int) config('news_sources.ai.min_publish_score'),
+            'publish' => $analysis->publish,
+            'analyzed_by' => $analysis->analyzedBy,
+        ]);
+
         if (! $analysis->title) {
             $this->logSkip($source, $candidate, 'analysis_missing_title');
 
