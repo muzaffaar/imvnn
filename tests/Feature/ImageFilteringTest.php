@@ -16,6 +16,7 @@ use App\Services\Media\Deduplication\RenditionKeyBuilder;
 use App\Services\Media\Extraction\HtmlContentExtractor;
 use App\Services\Media\ImageDimensionProbe;
 use App\Services\Media\ImageFingerprintProbe;
+use App\Services\Media\Selection\AiImageCurator;
 use App\Services\Media\Selection\MediaSelectionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -67,6 +68,19 @@ class ImageFilteringTest extends TestCase
         // only add network noise.
         $this->mock(ImageDimensionProbe::class)->shouldReceive('probe')->andReturn(false);
         $this->mock(ImageFingerprintProbe::class)->shouldReceive('fingerprint')->andReturn(false);
+    }
+
+    /**
+     * These tests exercise the cheaper rendition-key/perceptual-hash passes
+     * that run before the mandatory AI curator — stubbed here to a no-op
+     * pass-through so they don't reach for a real AI provider. AiImageCurator
+     * itself is covered in AiImageCuratorTest.
+     */
+    private function noAiCuration(): void
+    {
+        $this->mock(AiImageCurator::class)
+            ->shouldReceive('curate')
+            ->andReturnUsing(fn ($ranked) => $ranked);
     }
 
     /**
@@ -203,6 +217,7 @@ class ImageFilteringTest extends TestCase
     public function test_a_truncated_rendition_does_not_take_a_second_album_slot(): void
     {
         $this->neverProbe();
+        $this->noAiCuration();
         $base = 'https://storage.googleapis.com/gweb-uniblog-publish-prod/images/';
         $news = $this->newsWith([
             $this->asset($base.'LOVE_RENDERED_HERO_BLOG_SANS_LOG.width-2200.format-webp.webp', null, 2200, 1238),
@@ -220,6 +235,7 @@ class ImageFilteringTest extends TestCase
     public function test_one_picture_never_takes_two_album_slots(): void
     {
         $this->neverProbe();
+        $this->noAiCuration();
         $id = 'vOjFcTcdX2GCEB9yktJ7GAfyhTAMozW7scq3TrT9qk1mYw5qE0BdUqI8XQ';
         $news = $this->newsWith([
             $this->asset("https://lh3.googleusercontent.com/{$id}=w2000-h1260-n-nu", null, 2000, 1260),
@@ -446,6 +462,7 @@ class ImageFilteringTest extends TestCase
         // through and the album showed the photo twice. Their real dHashes,
         // measured from the live files, are identical.
         $this->mock(ImageDimensionProbe::class)->shouldReceive('probe')->andReturn(false);
+        $this->noAiCuration();
         $base = 'https://news.mit.edu/sites/default/files/';
         $device = $base.'images/202608/mit-lincoln-AI-GUIDE.jpg';
         $gallery = $base.'styles/news_article__image_gallery/public/images/202608/AI-GUIDE%20device.jpeg';
@@ -498,6 +515,7 @@ class ImageFilteringTest extends TestCase
         // article into the shared event pool. Neither filename hints they are
         // the same picture — only the pixels do.
         $this->mock(ImageDimensionProbe::class)->shouldReceive('probe')->andReturn(false);
+        $this->noAiCuration();
 
         $ownCopy = $this->asset('https://news.mit.edu/files/robot-hand-close-up.jpg', null, 1600, 1000);
         $eventCopy = $this->asset('https://another-outlet.example.com/img/press-photo-42.jpg', null, 1400, 900);

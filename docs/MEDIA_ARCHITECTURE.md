@@ -63,9 +63,9 @@ Every arrow above is a queue dispatch, never a synchronous call — see
 ## Duplicate detection
 
 Implemented in `app/Services/Media/Deduplication`. Four levels, cheapest
-first, short-circuiting on the first hit — plus two selection-time levels
-(0 and 0b) documented below, which are what actually protect a published
-album:
+first, short-circuiting on the first hit — plus three selection-time levels
+(0, 0b and 0c, the last of which is the mandatory AI pass) documented below,
+which are what actually protect a published album:
 
 1. **URL match** (`MediaDuplicateDetectionService::findByUrl`) — normalizes
    the URL (`UrlNormalizer`: lowercase host, strip tracking params like
@@ -187,7 +187,41 @@ Duplicates are never deleted: the loser row gets `status=duplicate` and
 Everything downstream (selection, scoring) reads through `canonical()`, so a
 pivot that happens to point at a since-resolved duplicate still works.
 
-### Level 0c — cross-article, per-channel ("never repost this exact picture")
+### Level 0c — mandatory AI curation (`AiImageCurator`)
+
+Levels 1-3 and Level 0/0b all argue from a URL, a filename, or a 64-bit dHash
+— none of which can tell that two different wire photos show the same
+generic scene (two similar shots of the same airline's aircraft, two
+near-identical stock photos of transmission towers), or see past a crop,
+rotation, or watermark. That is precisely the gap that let editorially
+redundant images reach the channel side by side in the same album even
+though no two of them were byte- or hash-identical.
+
+`AiImageCurator::curate()` runs last, over whatever Level 0/0b left standing,
+and sends up to `media.curation.max_candidates` of them to the configured
+vision model in a single multimodal call together with the article's
+title/content. The model returns `redundant_groups` (images that show the
+same photo, the same subject from a similar angle, or would add nothing
+shown together) and `ranked_relevant` (the survivors, best match first,
+capped at one per redundant group). The losing half of a redundant pair is
+persisted as a resolved duplicate exactly like a Level 0b pixel match
+(`status=duplicate`, `duplicate_of_id`, `matched_on: ai_vision`).
+
+Unlike `media.relevance`/`media.telegram_caption`, there is deliberately no
+`ai_enabled` toggle and no non-AI fallback here: a duplicate reaching the
+channel is the exact failure this exists to close, so a provider failure
+throws rather than degrading to the Level 0b result. `SelectMediaForPublishingJob`
+already retries with backoff and releases its scheduler claim on exhaustion,
+so the worst case is a delayed post, not a duplicate one. A non-visual asset
+(video) or one whose bytes can't be loaded rides through unjudged rather
+than being dropped for lack of a verdict.
+
+This is also where "pick the image that best matches this post" actually
+happens: `ranked_relevant`'s order — not `MediaQualityScorer`'s score — is
+what `planForImages` follows, so the model's own judgment of relevance to
+the specific story decides both what's redundant and what leads the post.
+
+### Level 0d — cross-article, per-channel ("never repost this exact picture")
 
 Everything above protects one published album; none of it stops a *different*,
 unrelated article from later reusing the same canonical asset. `Published`

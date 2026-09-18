@@ -12,6 +12,7 @@ use App\Services\News\ArticleAnalyzerInterface;
 use App\Services\News\NewsIngestionService;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -56,6 +57,50 @@ class NewsIngestionServiceTest extends TestCase
         $service->dispatchMediaExtraction($newsItem);
 
         Queue::assertPushed(ExtractMediaJob::class, fn (ExtractMediaJob $job) => $job->newsItemId === $newsItem->id);
+    }
+
+    public function test_the_analysis_score_is_logged_for_every_analyzed_candidate(): void
+    {
+        config([
+            'news_sources.topic_filter.enabled' => true,
+            'news_sources.ai.min_publish_score' => 55,
+        ]);
+        Queue::fake();
+        Log::spy();
+        $this->app->instance(ArticleAnalyzerInterface::class, $this->fakeAnalyzer(publish: true));
+
+        app(NewsIngestionService::class)->ingest($this->source(), $this->candidate());
+
+        Log::shouldHaveReceived('info')
+            ->withArgs(fn (string $message, array $context) => $message === 'pipeline.news.analysis_scored'
+                && $context['score'] === 80
+                && $context['is_ai_related'] === true
+                && $context['publish'] === true
+                && $context['min_publish_score'] === 55
+                && $context['analyzed_by'] === 'fake')
+            ->once();
+    }
+
+    public function test_the_analysis_score_is_logged_even_when_the_candidate_is_rejected(): void
+    {
+        // The whole point of this log line is to see the score distribution
+        // of articles that DON'T clear the bar, not just the ones that do —
+        // otherwise raising min_publish_score would be a guess forever.
+        config([
+            'news_sources.topic_filter.enabled' => true,
+            'news_sources.ai.min_publish_score' => 55,
+        ]);
+        Queue::fake();
+        Log::spy();
+        $this->app->instance(ArticleAnalyzerInterface::class, $this->fakeAnalyzer(publish: false));
+
+        app(NewsIngestionService::class)->ingest($this->source(), $this->candidate());
+
+        Log::shouldHaveReceived('info')
+            ->withArgs(fn (string $message, array $context) => $message === 'pipeline.news.analysis_scored'
+                && $context['score'] === 10
+                && $context['publish'] === false)
+            ->once();
     }
 
     private function source(): Source

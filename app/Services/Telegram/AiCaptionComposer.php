@@ -114,14 +114,17 @@ class AiCaptionComposer implements CaptionComposerInterface
             Write {$postWord}, in {$languageList}. {$languageRequirement}
             Headline under 70 chars, specific — not a copy of the title.
 
-            Plain prose (no headings/bullets) covering, only as far as facts
-            support: what happened and who did it; why/how, in plain terms;
-            the concrete result; and — only when the facts genuinely support
-            one, otherwise omit it — a government/economy/Uzbekistan angle.
+            Plain prose (no headings/bullets). Cover each of these only as
+            far as facts support — skip silently what the facts don't give,
+            never guess: what happened; who did it; when; how much/how many
+            (figures, amounts, counts); why/how it happened; the concrete
+            result; the cause behind it. Only when the facts genuinely support
+            one — otherwise omit it — mention its link to AI, government, or
+            the Ministry of Economy.
 
             Never write a vague, contentless sentence (e.g. "AI rivojlanishi
             xavfsizlik muammolarini keltirib chiqarmoqda") — every sentence
-            must add a concrete fact: what, who, how, what changed.
+            must add a concrete fact.
 
             Match the story's tone; up to 2-3 emoji. {$sharedNote}
 

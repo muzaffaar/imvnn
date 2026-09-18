@@ -116,6 +116,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | AI image curation — mandatory, selection-time
+    |--------------------------------------------------------------------------
+    |
+    | The final arbiter of what reaches one post's album — see AiImageCurator.
+    | Deliberately has no `ai_enabled` toggle and no non-AI fallback, unlike
+    | media.relevance/media.telegram_caption below: a duplicate reaching the
+    | channel is exactly the failure this exists to close, so a provider
+    | failure here throws and the selection job retries rather than silently
+    | falling back to the pixel-only result.
+    */
+    'curation' => [
+        // How many of a post's ranked finalists get sent to the model in one
+        // multimodal call. Bounds request size/cost regardless of pool size.
+        'max_candidates' => env('AI_IMAGE_CURATION_MAX_CANDIDATES', 8),
+        // Response is a couple of small integer arrays, so this stays tiny.
+        'max_output_tokens' => env('AI_IMAGE_CURATION_MAX_OUTPUT_TOKENS', 400),
+        'timeout_seconds' => env('AI_IMAGE_CURATION_TIMEOUT_SECONDS', 25),
+        // An image above this size is skipped for curation (excluded from the
+        // comparison) rather than base64-inlined — mirrors media.relevance.
+        'max_image_bytes' => env('AI_IMAGE_CURATION_MAX_IMAGE_BYTES', 4 * 1024 * 1024),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Quality scoring weights
     |--------------------------------------------------------------------------
     |

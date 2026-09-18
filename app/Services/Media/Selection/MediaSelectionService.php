@@ -66,6 +66,7 @@ class MediaSelectionService
         private readonly ImageDimensionProbe $dimensionProbe,
         private readonly ImageRoleClassifier $roleClassifier,
         private readonly ImageFingerprintProbe $fingerprintProbe,
+        private readonly AiImageCurator $curator,
     ) {}
 
     public function selectForNewsItem(NewsItem $newsItem, TelegramChannel $channel): PostMediaPlan
@@ -104,11 +105,12 @@ class MediaSelectionService
             ->filter(fn (MediaAsset $asset) => $this->contextualScore($asset) >= $minQuality)
             ->values();
 
-        // Last and strongest pass. Everything above argues from filenames and
-        // dimensions, neither of which can tell that one photograph was
-        // published under two unrelated names. Only the pixels can, and this
-        // is what keeps one picture out of two album slots.
-        $usable = $this->dropPerceptualDuplicates($usable);
+        // Last and strongest pass, and mandatory: everything above argues
+        // from filenames, dimensions and a 64-bit pixel hash, none of which
+        // can tell that two different wire photos are editorially redundant,
+        // or see past a crop/rotation/watermark. Only a model looking at the
+        // actual pixels can — see AiImageCurator.
+        $usable = $this->dropPerceptualDuplicates($usable, $newsItem);
 
         if ($usable->isEmpty()) {
             PipelineLogger::info('media.selection_no_usable_asset', [
@@ -229,24 +231,27 @@ class MediaSelectionService
     }
 
     /**
-     * Fingerprints the leading candidates, then collapses whatever the pixels
-     * reveal to be one picture.
+     * Fingerprints the leading candidates, collapses whatever the pixels
+     * reveal to be one picture, then hands the survivors to the mandatory AI
+     * curator — pixel/filename identity is blind to two different wire
+     * photos of the same scene, or to a crop/rotation/watermark, which is
+     * exactly what that pass exists to catch (see AiImageCurator).
      *
      * Runs last, and only over the finalists, for two reasons. Every cheaper
      * signal has already had its turn, so the list arriving here is short and
      * mostly distinct. And a fingerprint costs a bounded HTTP read, which is
      * only worth spending on an image that can still reach the album.
      *
-     * The losing copy is recorded as a resolved duplicate rather than merely
-     * skipped. Without that, the same pair is re-fetched and re-compared for
-     * every later article citing either URL; with it, `isUsable()` drops the
-     * loser before selection even begins, and Level 1/2 detection stops
-     * offering it as a canonical.
+     * The losing copy of a pixel-hash match is recorded as a resolved
+     * duplicate rather than merely skipped. Without that, the same pair is
+     * re-fetched and re-compared for every later article citing either URL;
+     * with it, `isUsable()` drops the loser before selection even begins, and
+     * Level 1/2 detection stops offering it as a canonical.
      *
      * @param  Collection<int, MediaAsset>  $ranked
      * @return Collection<int, MediaAsset>
      */
-    private function dropPerceptualDuplicates(Collection $ranked): Collection
+    private function dropPerceptualDuplicates(Collection $ranked, NewsItem $newsItem): Collection
     {
         $candidates = $ranked->take((int) config('media.deduplication.fingerprint_candidates', 8));
         $budgetSeconds = (float) config('media.deduplication.fingerprint_budget_seconds', 25);
@@ -292,7 +297,7 @@ class MediaSelectionService
             }
         }
 
-        return $survivors->values();
+        return $this->curator->curate($survivors->values(), $newsItem);
     }
 
     private function recordResolvedDuplicate(MediaAsset $duplicate, MediaAsset $keeper): void
